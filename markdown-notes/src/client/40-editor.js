@@ -124,14 +124,17 @@ MN.sourceLineSkeleton = function sourceLineSkeleton(lineText, lineStartOffset, s
 
   if (stripMarkers !== false) {
     let cursor = 0;
-    // 结构前缀：引用 / 标题 / 列表，允许嵌套。
-    for (let depth = 0; depth < 4; depth += 1) {
+    // 只剥离真正的块级容器前缀：先连续引用标记，再最多一个标题/列表标记。
+    // 列表项内容里以 ">" 或 "#" 开头的字符属于正文，不能被当成标记剥掉。
+    for (let depth = 0; depth < 8; depth += 1) {
       const rest = text.slice(cursor);
-      const match = /^\s*(?:>\s?|#{1,6}\s+|(?:[-*+]|\d{1,9}[.)])\s+)/.exec(rest);
-      if (!match) break;
-      markRemove(cursor, cursor + match[0].length);
-      cursor += match[0].length;
+      const quote = /^\s*>\s?/.exec(rest);
+      if (!quote) break;
+      markRemove(cursor, cursor + quote[0].length);
+      cursor += quote[0].length;
     }
+    const container = /^\s*(?:#{1,6}\s+|(?:[-*+]|\d{1,9}[.)])\s+)/.exec(text.slice(cursor));
+    if (container) markRemove(cursor, cursor + container[0].length);
     const headingTail = /\s+#+\s*$/.exec(text);
     if (headingTail) markRemove(headingTail.index, length);
   }
@@ -183,6 +186,9 @@ function collectRenderedSegments(block) {
   const walk = (node) => {
     if (node.nodeType === 3) {
       const value = node.nodeValue || '';
+      // 块与块之间由 renderer 用换行分隔，这类纯空白的格式化文本节点
+      // 不是源码行，不能当空行段，否则会让 blockquote / 表格后的行号整体错位。
+      if (value.trim() === '') return;
       let start = 0;
       for (let index = 0; index < value.length; index += 1) {
         if (value[index] === '\n') {
@@ -227,6 +233,28 @@ function renderedPositionAt(segment, index) {
   }
   const last = segment.parts[segment.parts.length - 1];
   return { node: last.node, offset: last.end };
+}
+
+/**
+ * 当 Selection 落在元素节点（而不是文本节点）上时，用 comparePoint 找到
+ * 光标之后最近的文本字符，避免整个映射退回粗糙的行比例估算。
+ */
+function renderedIndexForRange(segments, range) {
+  for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex += 1) {
+    const segment = segments[segmentIndex];
+    for (const part of segment.parts) {
+      let comparison = 1;
+      try {
+        comparison = typeof range.comparePoint === 'function' ? range.comparePoint(part.node, part.start) : 1;
+      } catch (error) {
+        comparison = 1;
+      }
+      if (comparison >= 0) return { segmentIndex, renderedIndex: part.partStart };
+    }
+  }
+  if (segments.length === 0) return null;
+  const last = segments[segments.length - 1];
+  return { segmentIndex: segments.length - 1, renderedIndex: last.text.length };
 }
 
 /** 找到行号对应的渲染块（data-line / data-line-end）。 */
@@ -651,7 +679,12 @@ MN.previewSelectionToPosition = function previewSelectionToPosition(preview, val
     }
     if (segmentIndex >= 0) break;
   }
-  if (segmentIndex < 0) return geometricPreviewSelection(preview, text);
+  if (segmentIndex < 0) {
+    const located = renderedIndexForRange(segments, range);
+    if (!located) return geometricPreviewSelection(preview, text);
+    segmentIndex = located.segmentIndex;
+    renderedIndex = located.renderedIndex;
+  }
 
   const entry = entries[Math.min(entries.length - 1, segmentIndex)];
   if (!entry) return geometricPreviewSelection(preview, text);

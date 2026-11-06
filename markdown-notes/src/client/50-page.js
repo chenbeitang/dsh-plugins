@@ -10,7 +10,11 @@ function loadUiPrefs() {
   const view = raw && (raw.view === 'source' || raw.view === 'preview' || raw.view === 'split') ? raw.view : 'split';
   const expanded = raw && Array.isArray(raw.expanded) ? raw.expanded.filter((item) => typeof item === 'string') : null;
   const syncScroll = Boolean(raw && raw.syncScroll === true);
-  return { view, expanded, syncScroll };
+  const splitRatio =
+    raw && typeof raw.splitRatio === 'number' && Number.isFinite(raw.splitRatio) && raw.splitRatio >= 0.2 && raw.splitRatio <= 0.8
+      ? raw.splitRatio
+      : 0.5;
+  return { view, expanded, syncScroll, splitRatio };
 }
 
 /** 把时间戳格式化为 HH:mm。 */
@@ -226,6 +230,7 @@ MN.AppPage = function AppPage(props) {
   const [expanded, setExpanded] = useState(() => new Set(initialPrefs.expanded || []));
   const [view, setView] = useState(initialPrefs.view);
   const [syncScroll, setSyncScroll] = useState(initialPrefs.syncScroll);
+  const [splitRatio, setSplitRatio] = useState(initialPrefs.splitRatio);
   const [ghostCaret, setGhostCaret] = useState(null);
   const [query, setQuery] = useState('');
   const [searchResult, setSearchResult] = useState(null);
@@ -255,6 +260,9 @@ MN.AppPage = function AppPage(props) {
   const mountedRef = useRef(true);
   const scrollSyncRef = useRef({ frame: 0, side: null, lockUntil: 0 });
   const ghostFrameRef = useRef(0);
+  const panesRef = useRef(null);
+  const splitDragCleanupRef = useRef(null);
+  const splitClickRef = useRef({ time: 0, x: 0 });
 
   const favoriteSet = useMemo(() => new Set(state.favorites || []), [state.favorites]);
   const allNotes = useMemo(() => MN.collectNotes(state.tree), [state.tree]);
@@ -685,12 +693,13 @@ MN.AppPage = function AppPage(props) {
       MN.writeLS(MN.LS_KEY, {
         view,
         syncScroll,
+        splitRatio,
         expanded: Array.from(expanded),
         lastOpened: lastOpenRef.current,
       });
     }, 200);
     return () => window.clearTimeout(timer);
-  }, [view, syncScroll, expanded]);
+  }, [view, syncScroll, splitRatio, expanded]);
 
   // Ctrl/Cmd + S 立即保存。
   useEffect(() => {
@@ -1216,6 +1225,119 @@ MN.AppPage = function AppPage(props) {
     else if (nextView === 'source') setFocusPane('source');
   }, []);
 
+  const resetSplitRatio = useCallback(() => setSplitRatio(0.5), []);
+
+  /** 拖拽中间分割线：按容器宽度换算比例，并保证两侧最小宽度。 */
+  const startSplitDrag = useCallback(
+    (event) => {
+      if (event.pointerType === 'mouse' && event.button !== 0) return;
+      const panes = panesRef.current;
+      if (!panes) return;
+      event.preventDefault();
+      const splitter = event.currentTarget;
+      const now = Date.now();
+      const previousClick = splitClickRef.current;
+      if (now - previousClick.time < 320 && Math.abs(event.clientX - previousClick.x) < 8) {
+        splitClickRef.current = { time: 0, x: 0 };
+        resetSplitRatio();
+        return;
+      }
+      splitClickRef.current = { time: now, x: event.clientX };
+      try {
+        if (splitter && typeof splitter.focus === 'function') splitter.focus({ preventScroll: true });
+      } catch (error) {
+        /* 聚焦失败不影响拖动 */
+      }
+      const rect = panes.getBoundingClientRect();
+      const usable = Math.max(1, rect.width);
+      const startX = event.clientX;
+      const startRatio = splitRatio;
+      const minRatio = Math.min(0.45, Math.max(0.2, 240 / usable));
+      let latest = startRatio;
+      try {
+        if (splitter && typeof splitter.setPointerCapture === 'function') splitter.setPointerCapture(event.pointerId);
+      } catch (error) {
+        /* 指针捕获失败不影响窗口级监听 */
+      }
+      if (splitter) splitter.setAttribute('data-dragging', 'true');
+      const onMove = (moveEvent) => {
+        const next = startRatio + (moveEvent.clientX - startX) / usable;
+        latest = Math.min(1 - minRatio, Math.max(minRatio, next));
+        // 拖动过程中直接改 CSS 变量，避免整个页面每帧重渲染。
+        panes.style.setProperty('--mn-split-left', (latest * 100).toFixed(2) + '%');
+        if (splitter) splitter.setAttribute('aria-valuenow', String(Math.round(latest * 100)));
+      };
+      const cleanup = () => {
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', finish);
+        window.removeEventListener('pointercancel', finish);
+        try {
+          if (splitter && typeof splitter.releasePointerCapture === 'function') splitter.releasePointerCapture(event.pointerId);
+        } catch (error) {
+          /* 已经被释放 */
+        }
+        if (splitter) splitter.removeAttribute('data-dragging');
+        splitDragCleanupRef.current = null;
+      };
+      function finish() {
+        cleanup();
+        setSplitRatio(latest);
+      }
+      splitDragCleanupRef.current = cleanup;
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', finish);
+      window.addEventListener('pointercancel', finish);
+    },
+    [resetSplitRatio, splitRatio],
+  );
+
+  const handleSplitterKeyDown = useCallback(
+    (event) => {
+      if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+        event.preventDefault();
+        const step = event.shiftKey ? 0.02 : 0.05;
+        setSplitRatio((current) =>
+          Math.min(0.8, Math.max(0.2, current + (event.key === 'ArrowRight' ? step : -step))),
+        );
+      } else if (event.key === 'Home') {
+        event.preventDefault();
+        resetSplitRatio();
+      }
+    },
+    [resetSplitRatio],
+  );
+
+  useEffect(
+    () => () => {
+      if (splitDragCleanupRef.current) splitDragCleanupRef.current();
+    },
+    [],
+  );
+
+  // 容器变窄时收敛比例，避免记忆的极端比例把某一侧压得过窄。
+  useEffect(() => {
+    if (view !== 'split') return undefined;
+    const panes = panesRef.current;
+    if (!panes) return undefined;
+    const clampRatio = () => {
+      const width = panes.clientWidth;
+      if (width < 1) return;
+      const minRatio = Math.min(0.45, Math.max(0.2, 240 / width));
+      setSplitRatio((current) => {
+        const next = Math.min(1 - minRatio, Math.max(minRatio, current));
+        return Math.abs(next - current) < 0.001 ? current : next;
+      });
+    };
+    clampRatio();
+    if (typeof ResizeObserver === 'function') {
+      const observer = new ResizeObserver(clampRatio);
+      observer.observe(panes);
+      return () => observer.disconnect();
+    }
+    window.addEventListener('resize', clampRatio);
+    return () => window.removeEventListener('resize', clampRatio);
+  }, [view]);
+
   const handleSettingsSaved = useCallback(
     async (settings) => {
       setState((previous) => ({ ...previous, settings }));
@@ -1669,7 +1791,11 @@ MN.AppPage = function AppPage(props) {
               : null,
             h(
               'div',
-              { className: 'mn-panes' },
+              {
+                className: 'mn-panes',
+                ref: panesRef,
+                style: view === 'split' ? { '--mn-split-left': (splitRatio * 100).toFixed(2) + '%' } : undefined,
+              },
               view !== 'preview'
                 ? h(
                     'section',
@@ -1699,6 +1825,22 @@ MN.AppPage = function AppPage(props) {
                       h('div', { ref: sourceMirrorRef, className: 'mn-source-mirror', 'aria-hidden': 'true' }),
                     ),
                   )
+                : null,
+              view === 'split'
+                ? h('div', {
+                    className: 'mn-splitter',
+                    role: 'separator',
+                    tabIndex: 0,
+                    'aria-orientation': 'vertical',
+                    'aria-label': t('splitter.label'),
+                    'aria-valuemin': 20,
+                    'aria-valuemax': 80,
+                    'aria-valuenow': Math.round(splitRatio * 100),
+                    title: t('splitter.title'),
+                    onPointerDown: startSplitDrag,
+                    onDoubleClick: resetSplitRatio,
+                    onKeyDown: handleSplitterKeyDown,
+                  })
                 : null,
               view !== 'source'
                 ? h(

@@ -74,28 +74,32 @@ const documentStub = {
   createElement: () => ({ setAttribute() {}, appendChild() {}, style: {} }),
   querySelector: () => null,
   activeElement: null,
-  createRange: () => ({
-    startOffset: 0,
-    node: null,
-    setStart(node, offset) {
-      this.node = node;
-      this.startOffset = offset;
-    },
-    collapse() {},
-    getBoundingClientRect() {
-      return {
-        left: 100 + this.startOffset * 8,
-        top: 200,
-        width: 0,
-        height: 20,
-        right: 100 + this.startOffset * 8,
-        bottom: 220,
-      };
-    },
-    getClientRects() {
-      return [this.getBoundingClientRect()];
-    },
-  }),
+  createRange() {
+    const range = {
+      startOffset: 0,
+      node: null,
+      setStart(node, offset) {
+        this.node = node;
+        this.startOffset = offset;
+      },
+      collapse() {},
+      getBoundingClientRect() {
+        return {
+          left: 100 + this.startOffset * 8,
+          top: 200,
+          width: 0,
+          height: 20,
+          right: 100 + this.startOffset * 8,
+          bottom: 220,
+        };
+      },
+      getClientRects() {
+        return [this.getBoundingClientRect()];
+      },
+    };
+    documentStub.lastRange = range;
+    return range;
+  },
 };
 
 function makeEnv() {
@@ -269,6 +273,7 @@ check('AppPage renders the note workspace', () => {
     new Set(['工作']),
     'split',
     true,
+    0.5,
     null,
     '',
     null,
@@ -291,6 +296,7 @@ check('AppPage renders the note workspace', () => {
   assert.ok(hasClass(element, 'mn-panes'));
   assert.ok(hasClass(element, 'mn-rich'));
   assert.ok(hasClass(element, 'mn-sync-toggle'));
+  assert.ok(hasClass(element, 'mn-splitter'));
   const text = [];
   collectText(element, text);
   assert.ok(text.join(' ').includes('周报'));
@@ -299,7 +305,7 @@ check('AppPage renders the note workspace', () => {
 check('AppPage renders the empty state', () => {
   const env = makeEnv();
   const emptyState = { settings: fakeSettings, tree: [], stats: { notes: 0, folders: 0 }, favorites: [], lastOpened: null };
-  env.reset([false, '', emptyState, new Set(), 'source', false, null, '', null, false, null, false, 'saved', null, '', 'source', null, null, null, 0]);
+  env.reset([false, '', emptyState, new Set(), 'source', false, 0.5, null, '', null, false, null, false, 'saved', null, '', 'source', null, null, null, 0]);
   const element = deepRender(env, env.MN.AppPage({ pickDirectory: null }));
   assert.ok(hasClass(element, 'mn-root'));
   assert.ok(hasClass(element, 'mn-empty'));
@@ -545,6 +551,9 @@ check('source skeleton drops markdown-only characters', () => {
   assert.equal(env.MN.sourceLineSkeleton('[link](https://x) tail', 0, true).text, 'link tail');
   assert.equal(env.MN.sourceLineSkeleton('see ![alt](a.png) now', 0, true).text, 'see  now');
   assert.equal(env.MN.sourceLineSkeleton('<u>under</u>', 0, true).text, 'under');
+  assert.equal(env.MN.sourceLineSkeleton('> - item', 0, true).text, 'item');
+  assert.equal(env.MN.sourceLineSkeleton('- > literal', 0, true).text, '> literal');
+  assert.equal(env.MN.sourceLineSkeleton('- # literal', 0, true).text, '# literal');
 });
 
 check('rendered text aligns to source characters', () => {
@@ -608,6 +617,108 @@ check('exact char mapping positions the preview caret', () => {
   const position = env.MN.previewSelectionToPosition(preview, value);
   assert.equal(position.line, 1);
   assert.equal(position.column, 5);
+  currentSelection = { rangeCount: 0, getRangeAt: () => null };
+});
+
+check('blockquote with leading > maps characters', () => {
+  const env = makeEnv();
+  env.reset([]);
+  const value = '> line one\n> line two';
+  const text1 = { nodeType: 3, nodeValue: 'line one', parentElement: null };
+  const text2 = { nodeType: 3, nodeValue: 'line two', parentElement: null };
+  const br = { nodeType: 1, tagName: 'BR', childNodes: [], classList: { contains: () => false } };
+  const paragraph = { nodeType: 1, tagName: 'P', childNodes: [text1, br, text2] };
+  text1.parentElement = paragraph;
+  text2.parentElement = paragraph;
+  const block = {
+    nodeType: 1,
+    tagName: 'BLOCKQUOTE',
+    childNodes: [paragraph],
+    classList: { contains: () => false },
+    getAttribute(name) {
+      if (name === 'data-line') return '1';
+      if (name === 'data-line-end') return '2';
+      return null;
+    },
+    getBoundingClientRect: () => ({ left: 40, top: 80, width: 400, height: 40 }),
+  };
+  paragraph.closest = (selector) => (selector === '[data-line]' ? block : null);
+  const preview = { querySelectorAll: () => [block], contains: () => true };
+
+  const first = env.MN.previewCaretRect(preview, value, 2);
+  assert.equal(first.left, 100);
+  assert.equal(first.top, 200);
+  const mid = env.MN.previewCaretRect(preview, value, 5);
+  assert.equal(mid.left, 124);
+  const second = env.MN.previewCaretRect(preview, value, 13);
+  assert.equal(second.left, 100);
+  assert.equal(second.top, 200);
+
+  currentSelection = {
+    rangeCount: 1,
+    getRangeAt: () => ({ startContainer: text2, startOffset: 2 }),
+  };
+  const position = env.MN.previewSelectionToPosition(preview, value);
+  assert.equal(position.line, 2);
+  assert.equal(position.column, 4);
+
+  // 内容可编辑区域把光标落在元素节点（而不是文本节点）时也要能定位。
+  currentSelection = {
+    rangeCount: 1,
+    getRangeAt: () => ({
+      startContainer: paragraph,
+      startOffset: 0,
+      comparePoint: () => 1,
+    }),
+  };
+  const elementPosition = env.MN.previewSelectionToPosition(preview, value);
+  assert.equal(elementPosition.line, 1);
+  assert.equal(elementPosition.column, 2);
+  currentSelection = { rangeCount: 0, getRangeAt: () => null };
+});
+
+check('blockquote ignores renderer newline text nodes between blocks', () => {
+  const env = makeEnv();
+  env.reset([]);
+  const value = '> one\n> two\n>\n> three';
+  const t1 = { nodeType: 3, nodeValue: 'one', parentElement: null };
+  const t2 = { nodeType: 3, nodeValue: 'two', parentElement: null };
+  const t3 = { nodeType: 3, nodeValue: 'three', parentElement: null };
+  const br = { nodeType: 1, tagName: 'BR', childNodes: [], classList: { contains: () => false } };
+  const p1 = { nodeType: 1, tagName: 'P', childNodes: [t1, br, t2] };
+  const p2 = { nodeType: 1, tagName: 'P', childNodes: [t3] };
+  t1.parentElement = p1;
+  t2.parentElement = p1;
+  t3.parentElement = p2;
+  const separator = { nodeType: 3, nodeValue: '\n' };
+  const block = {
+    nodeType: 1,
+    tagName: 'BLOCKQUOTE',
+    childNodes: [p1, separator, p2],
+    classList: { contains: () => false },
+    getAttribute(name) {
+      if (name === 'data-line') return '1';
+      if (name === 'data-line-end') return '4';
+      return null;
+    },
+    getBoundingClientRect: () => ({ left: 40, top: 80, width: 400, height: 60 }),
+  };
+  p1.closest = (selector) => (selector === '[data-line]' ? block : null);
+  p2.closest = (selector) => (selector === '[data-line]' ? block : null);
+  const preview = { querySelectorAll: () => [block], contains: () => true };
+
+  const rect = env.MN.previewCaretRect(preview, value, 16);
+  assert.equal(rect.left, 100);
+  assert.equal(documentStub.lastRange.node, t3);
+  assert.equal(documentStub.lastRange.startOffset, 0);
+
+  currentSelection = {
+    rangeCount: 1,
+    getRangeAt: () => ({ startContainer: t3, startOffset: 1 }),
+  };
+  const position = env.MN.previewSelectionToPosition(preview, value);
+  assert.equal(position.line, 4);
+  assert.equal(position.column, 3);
   currentSelection = { rangeCount: 0, getRangeAt: () => null };
 });
 

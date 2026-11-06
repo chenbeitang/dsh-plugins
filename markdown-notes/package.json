@@ -1,8 +1,8 @@
 {
   "name": "@local/markdown-notes",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "private": true,
-  "description": "Markdown 笔记管理器：左侧栏入口，本地目录树、图片与富文本、收藏、左右分栏双端可编辑；支持图片拖拽缩放、双端同步滚动与字符级双端光标提示。",
+  "description": "Markdown 笔记管理器：左侧栏入口，本地目录树、图片与富文本、收藏、左右分栏双端可编辑；支持可拖动分栏、图片缩放、同步滚动与字符级双端光标提示。",
   "type": "module",
   "icon": "icon.svg",
   "keywords": ["dsh", "dsh-plugin", "markdown", "notes", "editor"],

@@ -1,12 +1,41 @@
 # 版本说明 · @local/markdown-notes
 
-**当前版本：1.6.0**（2026-11-06）  
+**当前版本：1.7.0**（2026-11-06）  
 **运行环境**：DeepSeek Harness Web GUI（左侧栏面板 + Host HTTP API）  
 **入口**：左侧栏「Markdown 笔记」图标（面板 id `markdown-notes`）
 
 本文件记录每个版本的定位、功能变化与已知边界；安装与使用说明见 [README.md](README.md)。
 
 ## 版本历史
+
+### 1.7.0 — 代码块多语言语法高亮
+
+- 围栏代码块按语言标记（` ```java `、` ```xml ` 等）进行语法高亮，不再只以等宽纯文本展示。
+- 内置语言支持：
+  - Java、JavaScript / TypeScript、Python、C / C++ / C#、Go、Rust、Kotlin / Scala、Swift、PHP、Ruby；
+  - SQL、XML / HTML / SVG、CSS / SCSS / LESS、JSON / JSONC、YAML、TOML / INI；
+  - Shell / Bash / Zsh、PowerShell、Dockerfile、Makefile、diff / patch。
+- 按语言特性区分类别：
+  - 关键字、类型、函数、字符串（含三引号 / 模板字符串）、数字、布尔值、注释；
+  - XML/HTML 的标签、属性、属性值、实体、CDATA、注释；
+  - JSON 的 key / 字符串、布尔、注释（JSONC）；
+  - diff 的增删行与 hunk 头。
+- 高亮只插入 `<span>`，不改变代码文本；代码块与表格共享深色边框，光标映射、复制、Markdown 回写均保持原有行为。
+- 修正高亮把代码拆成多个 span 后，代码中的空格 / 换行在预览字符映射中被误忽略的问题；新增「高亮代码块字符映射」回归测试。
+- 围栏语言标记支持 `c#`、`c++`、`objective-c` 等带符号的写法；未知语言退化为通用高亮（注释 / 字符串 / 数字），代码始终经过 HTML 转义。
+- 新增 `MN.md.highlightCode` / `resolveLanguage` 纯函数与多语言文本保真、token 分类测试。
+
+### 1.6.2 — 代码块边框与表格统一
+
+- 代码块 `<pre>` 外框改用与表格外框相同的深色边框变量 `--mn-block-border`。
+- 表格与代码块共享同一主题感知边框色，避免一个深一个浅。
+- 仅样式调整，不改动渲染结构。
+
+### 1.6.1 — 表格边框加深
+
+- 渲染视图中的表格外框、单元格分隔线、表头底边改为从 `label-secondary` 混合出的更深边框色，不再使用接近背景的 `border-l1`。
+- 保留宿主主题 token：浅色/深色主题下都会跟随文字色，避免只适配一种主题。
+- 表格圆角、背景、单元格内边距不变。
 
 ### 1.6.0 — 文件管理器中打开 + 拖动移动
 
@@ -112,4 +141,4 @@ node tests/client-render.test.mjs
 node tests/client-boot.test.mjs
 ```
 
-最近一次验证（1.6.0）：上述测试全部通过，包含 move 仓储测试、引用块空白文本节点、元素 Selection、表格、分栏与文件栏收起渲染用例；构建产物见当前 `client.js`。
+最近一次验证（1.7.0）：全部测试通过，新增 Java/XML/JSON/SQL/Diff 文本保真与 token 分类用例，以及高亮代码块字符映射用例；高亮后代码块文本、HTML 转义和 data-line 映射保持不变。

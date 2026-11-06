@@ -755,6 +755,81 @@ check('blockquote ignores renderer newline text nodes between blocks', () => {
   currentSelection = { rangeCount: 0, getRangeAt: () => null };
 });
 
+check('highlighted code spans keep character mapping', () => {
+  const env = makeEnv();
+  env.reset([]);
+  const value = '```js\nconst x = 1;\n```';
+  const keyword = { nodeType: 3, nodeValue: 'const', parentElement: null };
+  const gap1 = { nodeType: 3, nodeValue: ' ', parentElement: null };
+  const name = { nodeType: 3, nodeValue: 'x', parentElement: null };
+  const gap2 = { nodeType: 3, nodeValue: ' ', parentElement: null };
+  const equal = { nodeType: 3, nodeValue: '=', parentElement: null };
+  const gap3 = { nodeType: 3, nodeValue: ' ', parentElement: null };
+  const number = { nodeType: 3, nodeValue: '1', parentElement: null };
+  const semi = { nodeType: 3, nodeValue: ';', parentElement: null };
+  const keywordSpan = { nodeType: 1, tagName: 'SPAN', childNodes: [keyword], classList: { contains: () => false } };
+  const operatorSpan = { nodeType: 1, tagName: 'SPAN', childNodes: [equal], classList: { contains: () => false } };
+  const numberSpan = { nodeType: 1, tagName: 'SPAN', childNodes: [number], classList: { contains: () => false } };
+  keyword.parentElement = keywordSpan;
+  gap1.parentElement = null;
+  name.parentElement = null;
+  gap2.parentElement = null;
+  equal.parentElement = operatorSpan;
+  gap3.parentElement = null;
+  number.parentElement = numberSpan;
+  semi.parentElement = null;
+  const code = {
+    nodeType: 1,
+    tagName: 'CODE',
+    childNodes: [keywordSpan, gap1, name, gap2, operatorSpan, gap3, numberSpan, semi],
+    classList: { contains: () => false },
+  };
+  keywordSpan.parentElement = code;
+  operatorSpan.parentElement = code;
+  numberSpan.parentElement = code;
+  gap1.parentElement = code;
+  name.parentElement = code;
+  gap2.parentElement = code;
+  gap3.parentElement = code;
+  semi.parentElement = code;
+  const block = {
+    nodeType: 1,
+    tagName: 'PRE',
+    childNodes: [code],
+    classList: { contains: () => false },
+    getAttribute(nameAttr) {
+      if (nameAttr === 'data-line') return '1';
+      if (nameAttr === 'data-line-end') return '3';
+      return null;
+    },
+    closest(selector) {
+      return selector === '[data-line]' ? block : null;
+    },
+    getBoundingClientRect: () => ({ left: 40, top: 80, width: 400, height: 40 }),
+  };
+  code.parentElement = block;
+  code.closest = (selector) => (selector === '[data-line]' ? block : null);
+  const preview = { querySelectorAll: () => [block], contains: () => true };
+
+  const rect = env.MN.previewCaretRect(preview, value, 16);
+  const caretNode = documentStub.lastRange.node;
+  const caretOffset = documentStub.lastRange.startOffset;
+  const caretAtNumberStart =
+    (caretNode === number && caretOffset === 0) || (caretNode === gap3 && caretOffset === 1);
+  assert.ok(caretAtNumberStart, 'caret should sit before the highlighted number');
+  assert.equal(rect.top, 200);
+  assert.equal(rect.height, 20);
+
+  currentSelection = {
+    rangeCount: 1,
+    getRangeAt: () => ({ startContainer: gap1, startOffset: 0 }),
+  };
+  const position = env.MN.previewSelectionToPosition(preview, value);
+  assert.equal(position.line, 2);
+  assert.equal(position.column, 5);
+  currentSelection = { rangeCount: 0, getRangeAt: () => null };
+});
+
 check('table cells map characters both ways', () => {
   const env = makeEnv();
   env.reset([]);

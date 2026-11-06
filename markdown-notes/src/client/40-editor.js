@@ -188,7 +188,22 @@ function collectRenderedSegments(block) {
       const value = node.nodeValue || '';
       // 块与块之间由 renderer 用换行分隔，这类纯空白的格式化文本节点
       // 不是源码行，不能当空行段，否则会让 blockquote / 表格后的行号整体错位。
-      if (value.trim() === '') return;
+      // 注意：代码高亮会把代码拆成多个 span，span 之间的空格 / 换行是真实代码，
+      // 必须保留；纯空格（不含换行）也是行内格式之间的有效文本。
+      if (value.trim() === '') {
+        let inCode = false;
+        let current = node.parentElement;
+        while (current) {
+          const parentTag = current.tagName ? String(current.tagName).toUpperCase() : '';
+          if (parentTag === 'PRE' || parentTag === 'CODE') {
+            inCode = true;
+            break;
+          }
+          if (current === block) break;
+          current = current.parentElement;
+        }
+        if (!inCode && value.indexOf('\n') !== -1) return;
+      }
       let start = 0;
       for (let index = 0; index < value.length; index += 1) {
         if (value[index] === '\n') {

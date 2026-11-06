@@ -327,7 +327,7 @@ MN.md = (function () {
       }
       const startLine = index + 1;
 
-      const fence = /^\s*(```+|~~~+)\s*([\w+-]*)\s*$/.exec(line);
+      const fence = /^\s*(```+|~~~+)\s*([\w+#.-]*)\s*$/.exec(line);
       if (fence) {
         const marker = fence[1];
         const language = fence[2] || '';
@@ -339,7 +339,9 @@ MN.md = (function () {
         }
         if (index < lines.length) index += 1;
         const className = language === '' ? '' : ' class="language-' + escapeAttr(language) + '"';
-        out.push('<pre' + attrs(startLine, index) + '><code' + className + '>' + escapeHtml(buffer.join('\n')) + '</code></pre>');
+        const code = buffer.join('\n');
+        const highlighted = language === '' ? escapeHtml(code) : highlightCode(code, language);
+        out.push('<pre' + attrs(startLine, index) + '><code' + className + '>' + highlighted + '</code></pre>');
         continue;
       }
 
@@ -641,10 +643,515 @@ MN.md = (function () {
     return containerToMarkdown(element, context).replace(/\n{3,}/g, '\n\n').trim();
   }
 
+  /* ------------------------------------------------------------------ */
+  /* 代码块语法高亮                                                       */
+  /* ------------------------------------------------------------------ */
+
+  function words(source) {
+    return new Set(String(source).split(/\s+/).filter(Boolean));
+  }
+
+  const JS_KEYWORDS = words(
+    'as async await break case catch class const continue debugger declare default delete do else enum export extends ' +
+      'finally for from function get if implements import in instanceof interface let namespace new of override private ' +
+      'protected public readonly return set static super switch this throw try type typeof undefined var while with yield ' +
+      'true false null abstract any boolean number string symbol unknown never object keyof readonly',
+  );
+  const CLike_KEYWORDS = words(
+    'auto break case char const continue default do double else enum extern float for goto if inline int long register ' +
+      'restrict return short signed sizeof static struct switch typedef union unsigned void volatile while class namespace ' +
+      'public private protected template typename virtual override final new delete using try catch throw bool true false ' +
+      'nullptr constexpr decltype noexcept operator friend explicit mutable',
+  );
+  const CSHARP_KEYWORDS = new Set([
+    ...CLike_KEYWORDS,
+    ...words('async await var string decimal object base this foreach out ref params readonly sealed partial record init namespace'),
+  ]);
+  const JAVA_KEYWORDS = words(
+    'abstract assert boolean break byte case catch char class const continue default do double else enum extends final ' +
+      'finally float for goto if implements import instanceof int interface long native new package private protected public ' +
+      'return short static strictfp super switch synchronized this throw throws transient try void volatile while var record ' +
+      'sealed permits yield true false null',
+  );
+  const PYTHON_KEYWORDS = words(
+    'and as assert async await break class continue def del elif else except False finally for from global if import in is ' +
+      'lambda None nonlocal not or pass raise return True try while with yield match case',
+  );
+  const RUBY_KEYWORDS = words(
+    'alias and begin break case class def defined do else elsif end ensure false for if in module next nil not or redo rescue ' +
+      'retry return self super then true undef unless until when while yield require attr_accessor attr_reader',
+  );
+  const PHP_KEYWORDS = words(
+    'abstract and array as break callable case catch class clone const continue declare default do echo else elseif empty ' +
+      'enddeclare endfor endforeach endif endswitch endwhile eval exit extends final finally fn for foreach function global ' +
+      'goto if implements include include_once instanceof insteadof interface isset list match namespace new or print private ' +
+      'protected public readonly require require_once return static switch throw trait try unset use var while xor yield',
+  );
+  const GO_KEYWORDS = words(
+    'break case chan const continue default defer else fallthrough for func go goto if import interface map package range ' +
+      'return select struct switch type var true false nil',
+  );
+  const RUST_KEYWORDS = words(
+    'as async await break const continue crate dyn else enum extern false fn for if impl in let loop match mod move mut pub ' +
+      'ref return self Self static struct super trait true type unsafe use where while',
+  );
+  const KOTLIN_KEYWORDS = words(
+    'as break class continue do else false for fun if in interface is null object package return super this throw true try ' +
+      'typealias typeof val var when while by catch constructor delegate dynamic field file finally get import init param ' +
+      'property receiver set setparam where actual abstract annotation companion const crossinline data enum expect external ' +
+      'final infix inline inner internal lateinit noinline open operator out override private protected public reified sealed ' +
+      'suspend tailrec vararg',
+  );
+  const SWIFT_KEYWORDS = words(
+    'associatedtype class deinit enum extension fileprivate func import init inout internal let open operator private protocol ' +
+      'public rethrows static struct subscript typealias var break case continue default defer do else fallthrough for guard ' +
+      'if in repeat return switch where while as Any catch false is nil super self Self throw throws true try',
+  );
+  const SQL_KEYWORDS = words(
+    'select from where insert into update delete create alter drop table values set join left right inner outer full on group ' +
+      'by order having limit offset union all as and or not null is in like between exists distinct count sum avg min max case ' +
+      'when then else end primary key foreign references index view database begin commit rollback grant revoke',
+  );
+  const SHELL_KEYWORDS = words(
+    'if then else elif fi for while do done case esac function in select until return exit export local readonly declare unset ' +
+    'shift source alias echo printf cd pwd read test true false',
+  );
+  const POWERSHELL_KEYWORDS = words(
+    'if else elseif foreach for while do switch function filter param return try catch finally throw begin process end in break ' +
+    'continue class enum static hidden using var true false null',
+  );
+  const DOCKER_KEYWORDS = words(
+    'FROM RUN CMD LABEL MAINTAINER EXPOSE ENV ADD COPY ENTRYPOINT VOLUME USER WORKDIR ARG ONBUILD STOPSIGNAL HEALTHCHECK SHELL',
+  );
+  const YAML_KEYWORDS = words('true false null yes no on off');
+
+  const LANG_ALIASES = {
+    java: 'java',
+    javascript: 'javascript',
+    js: 'javascript',
+    jsx: 'javascript',
+    mjs: 'javascript',
+    cjs: 'javascript',
+    typescript: 'javascript',
+    ts: 'javascript',
+    tsx: 'javascript',
+    c: 'clike',
+    h: 'clike',
+    cpp: 'clike',
+    'c++': 'clike',
+    cc: 'clike',
+    hpp: 'clike',
+    objc: 'clike',
+    'objective-c': 'clike',
+    csharp: 'csharp',
+    cs: 'csharp',
+    'c#': 'csharp',
+    'f#': 'generic',
+    vb: 'generic',
+    vbnet: 'generic',
+    groovy: 'java',
+    gradle: 'java',
+    python: 'python',
+    py: 'python',
+    ruby: 'ruby',
+    rb: 'ruby',
+    php: 'php',
+    go: 'go',
+    golang: 'go',
+    rust: 'rust',
+    rs: 'rust',
+    kotlin: 'kotlin',
+    kt: 'kotlin',
+    scala: 'kotlin',
+    swift: 'swift',
+    sql: 'sql',
+    mysql: 'sql',
+    pgsql: 'sql',
+    postgres: 'sql',
+    sqlite: 'sql',
+    xml: 'xml',
+    html: 'xml',
+    htm: 'xml',
+    xhtml: 'xml',
+    svg: 'xml',
+    vue: 'xml',
+    svelte: 'xml',
+    json: 'json',
+    jsonc: 'json',
+    yaml: 'yaml',
+    yml: 'yaml',
+    toml: 'toml',
+    ini: 'toml',
+    properties: 'toml',
+    css: 'css',
+    scss: 'css',
+    less: 'css',
+    sh: 'shell',
+    bash: 'shell',
+    zsh: 'shell',
+    shell: 'shell',
+    console: 'shell',
+    powershell: 'powershell',
+    ps1: 'powershell',
+    diff: 'diff',
+    patch: 'diff',
+    dockerfile: 'docker',
+    docker: 'docker',
+    makefile: 'make',
+    mk: 'make',
+    markdown: 'markdown',
+    md: 'markdown',
+    text: 'plain',
+    txt: 'plain',
+  };
+
+  const LANG_CONFIGS = {
+    java: { lineComments: ['//'], blockComments: [['/*', '*/']], strings: ['"', "'"], tripleStrings: ['"""'], keywords: JAVA_KEYWORDS, typeHeuristic: true },
+    javascript: { lineComments: ['//'], blockComments: [['/*', '*/']], strings: ['"', "'", '`'], keywords: JS_KEYWORDS, typeHeuristic: true },
+    clike: { lineComments: ['//'], blockComments: [['/*', '*/']], strings: ['"', "'"], keywords: CLike_KEYWORDS, typeHeuristic: true },
+    csharp: { lineComments: ['//'], blockComments: [['/*', '*/']], strings: ['"', "'"], keywords: CSHARP_KEYWORDS, typeHeuristic: true },
+    python: { lineComments: ['#'], strings: ['"', "'"], tripleStrings: ['"""', "'''"], keywords: PYTHON_KEYWORDS, typeHeuristic: false },
+    ruby: { lineComments: ['#'], strings: ['"', "'"], keywords: RUBY_KEYWORDS, typeHeuristic: false },
+    php: { lineComments: ['//', '#'], blockComments: [['/*', '*/']], strings: ['"', "'"], keywords: PHP_KEYWORDS, typeHeuristic: false },
+    go: { lineComments: ['//'], blockComments: [['/*', '*/']], strings: ['"', "'", '`'], keywords: GO_KEYWORDS, typeHeuristic: true },
+    rust: { lineComments: ['//'], blockComments: [['/*', '*/']], strings: ['"', "'"], keywords: RUST_KEYWORDS, typeHeuristic: true },
+    kotlin: { lineComments: ['//'], blockComments: [['/*', '*/']], strings: ['"', "'"], tripleStrings: ['"""'], keywords: KOTLIN_KEYWORDS, typeHeuristic: true },
+    swift: { lineComments: ['//'], blockComments: [['/*', '*/']], strings: ['"', "'"], tripleStrings: ['"""'], keywords: SWIFT_KEYWORDS, typeHeuristic: true },
+    sql: { lineComments: ['--'], blockComments: [['/*', '*/']], strings: ["'", '"'], keywords: SQL_KEYWORDS, caseInsensitive: true, typeHeuristic: false },
+    shell: { lineComments: ['#'], strings: ['"', "'"], keywords: SHELL_KEYWORDS, variables: true, typeHeuristic: false },
+    powershell: { lineComments: ['#'], strings: ['"', "'"], keywords: POWERSHELL_KEYWORDS, variables: true, typeHeuristic: false },
+    docker: { lineComments: ['#'], strings: ['"', "'"], keywords: DOCKER_KEYWORDS, typeHeuristic: false },
+    make: { lineComments: ['#'], strings: ['"', "'"], keywords: words('include define ifeq ifneq ifdef ifndef else endif export unexport override'),
+      typeHeuristic: false },
+    css: { blockComments: [['/*', '*/']], strings: ['"', "'"], keywords: words('important media supports keyframes font-face import charset namespace'),
+      propertyHeuristic: true, typeHeuristic: false },
+    yaml: { lineComments: ['#'], strings: ['"', "'"], keywords: YAML_KEYWORDS, typeHeuristic: false },
+    toml: { lineComments: ['#'], strings: ['"', "'"], keywords: words('true false'), propertyHeuristic: true, typeHeuristic: false },
+    markdown: { lineComments: [], strings: [], typeHeuristic: false },
+    plain: { lineComments: [], strings: [], typeHeuristic: false },
+    generic: { lineComments: ['//'], blockComments: [['/*', '*/']], strings: ['"', "'"], typeHeuristic: false },
+  };
+
+  function resolveLanguage(raw) {
+    const key = String(raw === undefined || raw === null ? '' : raw).trim().toLowerCase();
+    if (key === '') return '';
+    return LANG_ALIASES[key] || 'generic';
+  }
+
+  function emitHtml(out, text, className) {
+    if (!text) return out;
+    return out + (className ? '<span class="' + className + '">' + escapeHtml(text) + '</span>' : escapeHtml(text));
+  }
+
+  /** 扫描带转义的字符串，返回结束下标（不包含结束引号本身时按调用约定处理）。 */
+  function scanStringEnd(code, start, quote, multiline) {
+    let index = start + quote.length;
+    while (index < code.length) {
+      if (code[index] === '\\') {
+        index += 2;
+        continue;
+      }
+      if (code.startsWith(quote, index)) return index + quote.length;
+      if (!multiline && code[index] === '\n') return index;
+      index += 1;
+    }
+    return code.length;
+  }
+
+  /** 通用语言高亮：注释、字符串、数字、关键字、函数、类型、操作符。 */
+  function highlightGeneric(code, config) {
+    const cfg = config || LANG_CONFIGS.generic;
+    const keywords = cfg.keywords instanceof Set ? cfg.keywords : words('');
+    const out = [];
+    let i = 0;
+    const length = code.length;
+    while (i < length) {
+      const rest = code.slice(i);
+      let matched = false;
+
+      for (const [open, close] of cfg.blockComments || []) {
+        if (rest.startsWith(open)) {
+          const found = code.indexOf(close, i + open.length);
+          const end = found < 0 ? length : found + close.length;
+          out.push(emitHtml('', code.slice(i, end), 'tok-comment'));
+          i = end;
+          matched = true;
+          break;
+        }
+      }
+      if (matched) continue;
+
+      for (const marker of cfg.lineComments || []) {
+        if (rest.startsWith(marker)) {
+          let end = code.indexOf('\n', i);
+          if (end < 0) end = length;
+          out.push(emitHtml('', code.slice(i, end), 'tok-comment'));
+          i = end;
+          matched = true;
+          break;
+        }
+      }
+      if (matched) continue;
+
+      for (const quote of cfg.tripleStrings || []) {
+        if (rest.startsWith(quote)) {
+          const end = scanStringEnd(code, i, quote, true);
+          out.push(emitHtml('', code.slice(i, end), 'tok-string'));
+          i = end;
+          matched = true;
+          break;
+        }
+      }
+      if (matched) continue;
+
+      for (const quote of cfg.strings || []) {
+        if (rest.startsWith(quote)) {
+          const end = scanStringEnd(code, i, quote, quote === '`');
+          out.push(emitHtml('', code.slice(i, end), 'tok-string'));
+          i = end;
+          matched = true;
+          break;
+        }
+      }
+      if (matched) continue;
+
+      if (cfg.variables) {
+        const variable = /^\$\{[^}\n]*\}|\$[A-Za-z_]\w*/.exec(rest);
+        if (variable) {
+          out.push(emitHtml('', variable[0], 'tok-variable'));
+          i += variable[0].length;
+          continue;
+        }
+      }
+
+      const number = /^(?:0[xX][0-9a-fA-F]+|0[bB][01]+|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?(?:[fFdDlLuU]+)?)/.exec(rest);
+      if (number) {
+        out.push(emitHtml('', number[0], 'tok-number'));
+        i += number[0].length;
+        continue;
+      }
+
+      const annotation = /^@[A-Za-z_]\w*/.exec(rest);
+      if (annotation) {
+        out.push(emitHtml('', annotation[0], 'tok-annotation'));
+        i += annotation[0].length;
+        continue;
+      }
+
+      const identifier = /^[A-Za-z_$][A-Za-z0-9_$]*/.exec(rest);
+      if (identifier) {
+        const word = identifier[0];
+        const probe = cfg.caseInsensitive ? word.toLowerCase() : word;
+        const after = code.slice(i + word.length);
+        let className = '';
+        if (keywords.has(probe)) className = 'tok-keyword';
+        else if (/^(?:true|false|null|nil|None|undefined)$/.test(word)) className = 'tok-bool';
+        else if (cfg.propertyHeuristic && /^\s*:/.test(after)) className = 'tok-attr';
+        else if (cfg.typeHeuristic && /^[A-Z]/.test(word) && /^[A-Za-z0-9_$]*$/.test(word)) className = 'tok-type';
+        else if (/^\s*\(/.test(after)) className = 'tok-function';
+        out.push(emitHtml('', word, className));
+        i += word.length;
+        continue;
+      }
+
+      const operator = /^(?:===|!==|=>|->|::|==|!=|<=|>=|&&|\|\||\+\+|--|\+=|-=|\*=|\/=|%=|\*\*|[+\-*/%=<>!&|^~?:])/.exec(rest);
+      if (operator) {
+        out.push(emitHtml('', operator[0], 'tok-operator'));
+        i += operator[0].length;
+        continue;
+      }
+
+      out.push(escapeHtml(rest[0]));
+      i += 1;
+    }
+    return out.join('');
+  }
+
+  /** XML / HTML 高亮：标签、属性、属性值、注释、CDATA、实体。 */
+  function highlightXml(code) {
+    let out = '';
+    let i = 0;
+    const length = code.length;
+    while (i < length) {
+      if (code.startsWith('<!--', i)) {
+        const found = code.indexOf('-->', i + 4);
+        const end = found < 0 ? length : found + 3;
+        out = emitHtml(out, code.slice(i, end), 'tok-comment');
+        i = end;
+        continue;
+      }
+      if (code.startsWith('<![CDATA[', i)) {
+        const found = code.indexOf(']]>', i + 9);
+        const end = found < 0 ? length : found + 3;
+        out = emitHtml(out, code.slice(i, end), 'tok-string');
+        i = end;
+        continue;
+      }
+      if (code.startsWith('<?', i) || code.startsWith('<!', i)) {
+        const found = code.indexOf('>', i + 2);
+        const end = found < 0 ? length : found + 1;
+        out = emitHtml(out, code.slice(i, end), 'tok-meta');
+        i = end;
+        continue;
+      }
+      if (code[i] === '<') {
+        let j = i + 1;
+        let closing = false;
+        if (code[j] === '/') {
+          closing = true;
+          j += 1;
+        }
+        const name = /^[A-Za-z_][\w:.-]*/.exec(code.slice(j));
+        if (!name) {
+          out = emitHtml(out, '<', '');
+          i += 1;
+          continue;
+        }
+        out = emitHtml(out, (closing ? '</' : '<') + name[0], 'tok-tag');
+        j += name[0].length;
+        while (j < length) {
+          const rest = code.slice(j);
+          const whitespace = /^\s+/.exec(rest);
+          if (whitespace) {
+            out = emitHtml(out, whitespace[0], '');
+            j += whitespace[0].length;
+            continue;
+          }
+          if (rest.startsWith('/>')) {
+            out = emitHtml(out, '/>', 'tok-operator');
+            j += 2;
+            break;
+          }
+          if (rest[0] === '>') {
+            out = emitHtml(out, '>', '');
+            j += 1;
+            break;
+          }
+          const attribute = /^[A-Za-z_:][\w:.-]*/.exec(rest);
+          if (attribute) {
+            out = emitHtml(out, attribute[0], 'tok-attr');
+            j += attribute[0].length;
+            continue;
+          }
+          if (rest[0] === '=') {
+            out = emitHtml(out, '=', 'tok-operator');
+            j += 1;
+            continue;
+          }
+          if (rest[0] === '"' || rest[0] === "'") {
+            const end = scanStringEnd(code, j, rest[0], true);
+            out = emitHtml(out, code.slice(j, end), 'tok-string');
+            j = end;
+            continue;
+          }
+          out = emitHtml(out, rest[0], '');
+          j += 1;
+        }
+        i = j;
+        continue;
+      }
+      let next = code.indexOf('<', i);
+      if (next < 0) next = length;
+      const text = code.slice(i, next);
+      const entityPattern = /&(?:#\d+|#x[\da-f]+|[a-z][\w]*);/gi;
+      let cursor = 0;
+      let match;
+      while ((match = entityPattern.exec(text)) !== null) {
+        out = emitHtml(out, text.slice(cursor, match.index), '');
+        out = emitHtml(out, match[0], 'tok-meta');
+        cursor = match.index + match[0].length;
+      }
+      out = emitHtml(out, text.slice(cursor), '');
+      i = next;
+    }
+    return out;
+  }
+
+  /** JSON / JSONC 高亮：key、字符串、数字、布尔、注释。 */
+  function highlightJson(code) {
+    let out = '';
+    let i = 0;
+    while (i < code.length) {
+      const rest = code.slice(i);
+      if (rest.startsWith('//')) {
+        let end = code.indexOf('\n', i);
+        if (end < 0) end = code.length;
+        out = emitHtml(out, code.slice(i, end), 'tok-comment');
+        i = end;
+        continue;
+      }
+      if (rest.startsWith('/*')) {
+        const found = code.indexOf('*/', i + 2);
+        const end = found < 0 ? code.length : found + 2;
+        out = emitHtml(out, code.slice(i, end), 'tok-comment');
+        i = end;
+        continue;
+      }
+      if (rest[0] === '"') {
+        const end = scanStringEnd(code, i, '"', false);
+        const after = code.slice(end);
+        out = emitHtml(out, code.slice(i, end), /^\s*:/.test(after) ? 'tok-key' : 'tok-string');
+        i = end;
+        continue;
+      }
+      const number = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/.exec(rest);
+      if (number) {
+        out = emitHtml(out, number[0], 'tok-number');
+        i += number[0].length;
+        continue;
+      }
+      const boolean = /^(?:true|false|null)\b/.exec(rest);
+      if (boolean) {
+        out = emitHtml(out, boolean[0], 'tok-bool');
+        i += boolean[0].length;
+        continue;
+      }
+      if (/\s/.test(rest[0])) {
+        out = emitHtml(out, rest[0], '');
+      } else {
+        out = emitHtml(out, rest[0], 'tok-operator');
+      }
+      i += 1;
+    }
+    return out;
+  }
+
+  /** diff / patch 高亮：增删行与 hunk 头。 */
+  function highlightDiff(code) {
+    const lines = code.split('\n');
+    const rendered = lines.map((line) => {
+      if (/^\+\+\+|^---/.test(line)) return emitHtml('', line, 'tok-meta');
+      if (/^@@/.test(line)) return emitHtml('', line, 'tok-meta');
+      if (line.startsWith('+')) return emitHtml('', line, 'tok-added');
+      if (line.startsWith('-')) return emitHtml('', line, 'tok-removed');
+      return emitHtml('', line, '');
+    });
+    return rendered.join(escapeHtml('\n'));
+  }
+
+  /**
+   * 代码块语法高亮入口：返回已经转义的 HTML。
+   * 只有可识别的语言才会高亮；未知语言退化为通用高亮。
+   */
+  function highlightCode(code, language) {
+    const source = String(code === undefined || code === null ? '' : code);
+    if (source === '') return '';
+    const lang = resolveLanguage(language);
+    if (lang === '') return escapeHtml(source);
+    if (lang === 'xml') return highlightXml(source);
+    if (lang === 'json') return highlightJson(source);
+    if (lang === 'diff') return highlightDiff(source);
+    if (lang === 'plain') return escapeHtml(source);
+    if (lang === 'markdown') return escapeHtml(source);
+    return highlightGeneric(source, LANG_CONFIGS[lang] || LANG_CONFIGS.generic);
+  }
+
   return {
     render,
     htmlToMarkdown,
     inline,
     escapeHtml,
+    highlightCode,
+    resolveLanguage,
   };
 })();

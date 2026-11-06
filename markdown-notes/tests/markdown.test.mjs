@@ -44,6 +44,63 @@ check('code fence is escaped, not formatted', () => {
   assert.match(html, /<pre><code class="language-js">/);
   assert.match(html, /&lt;b&gt;/);
   assert.doesNotMatch(html, /<b>/);
+  assert.match(html, /class="tok-keyword"/);
+  assert.match(html, /class="tok-string"/);
+});
+
+function highlightedText(html) {
+  return html
+    .replace(/<[^>]+>/g, '')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
+check('syntax highlighting keeps code text exact', () => {
+  const samples = {
+    java: 'public class Demo {\n  private String name = "x"; // note\n  int n = 42;\n}',
+    javascript: 'const add = (a, b) => a + b; // sum\nconst s = `x${a}`;',
+    python: 'def add(a, b):\n    """doc"""\n    return a + b  # sum',
+    xml: '<root id="1"><child name="x">text &amp; more</child></root>',
+    json: '{\n  "name": "demo",\n  "ok": true,\n  "n": 3\n}',
+    sql: "SELECT id, name FROM users WHERE id = 1 -- pick\n",
+    diff: '--- a.txt\n+++ b.txt\n@@ -1 +1 @@\n-old\n+new\n',
+  };
+  for (const [language, code] of Object.entries(samples)) {
+    const html = MN.md.highlightCode(code, language);
+    assert.equal(highlightedText(html), code, language + ' text should survive highlighting');
+  }
+});
+
+check('languages get their own token classes', () => {
+  const java = MN.md.highlightCode('public class A { String s = "x"; // c\n}', 'java');
+  assert.match(java, /tok-keyword/);
+  assert.match(java, /tok-type/);
+  assert.match(java, /tok-string/);
+  assert.match(java, /tok-comment/);
+
+  const xml = MN.md.highlightCode('<a href="x">t</a>', 'xml');
+  assert.match(xml, /tok-tag/);
+  assert.match(xml, /tok-attr/);
+  assert.match(xml, /tok-string/);
+
+  const json = MN.md.highlightCode('{"k": true}', 'json');
+  assert.match(json, /tok-key/);
+  assert.match(json, /tok-bool/);
+
+  const diff = MN.md.highlightCode('+added\n-removed', 'diff');
+  assert.match(diff, /tok-added/);
+  assert.match(diff, /tok-removed/);
+});
+
+check('unknown and plain languages do not break', () => {
+  const generic = render('```unknown\nplain <text> & stuff\n```');
+  assert.match(generic, /<pre><code class="language-unknown">/);
+  const plain = MN.md.highlightCode('a < b && c', 'plain');
+  assert.equal(highlightedText(plain), 'a < b && c');
+  assert.doesNotMatch(plain, /<b>/);
 });
 
 check('links and images', () => {

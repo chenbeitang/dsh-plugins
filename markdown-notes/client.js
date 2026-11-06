@@ -20,7 +20,7 @@ window.__ModuleLoader__.load({
     /** 本包 Client 侧唯一命名空间：各 part 只往这里挂方法/组件。 */
     const MN = {
       id: 'markdown-notes',
-      version: '1.6.0',
+      version: '1.7.0',
       React,
       h,
       useState,
@@ -627,7 +627,7 @@ MN.md = (function () {
       }
       const startLine = index + 1;
 
-      const fence = /^\s*(```+|~~~+)\s*([\w+-]*)\s*$/.exec(line);
+      const fence = /^\s*(```+|~~~+)\s*([\w+#.-]*)\s*$/.exec(line);
       if (fence) {
         const marker = fence[1];
         const language = fence[2] || '';
@@ -639,7 +639,9 @@ MN.md = (function () {
         }
         if (index < lines.length) index += 1;
         const className = language === '' ? '' : ' class="language-' + escapeAttr(language) + '"';
-        out.push('<pre' + attrs(startLine, index) + '><code' + className + '>' + escapeHtml(buffer.join('\n')) + '</code></pre>');
+        const code = buffer.join('\n');
+        const highlighted = language === '' ? escapeHtml(code) : highlightCode(code, language);
+        out.push('<pre' + attrs(startLine, index) + '><code' + className + '>' + highlighted + '</code></pre>');
         continue;
       }
 
@@ -941,11 +943,516 @@ MN.md = (function () {
     return containerToMarkdown(element, context).replace(/\n{3,}/g, '\n\n').trim();
   }
 
+  /* ------------------------------------------------------------------ */
+  /* 代码块语法高亮                                                       */
+  /* ------------------------------------------------------------------ */
+
+  function words(source) {
+    return new Set(String(source).split(/\s+/).filter(Boolean));
+  }
+
+  const JS_KEYWORDS = words(
+    'as async await break case catch class const continue debugger declare default delete do else enum export extends ' +
+      'finally for from function get if implements import in instanceof interface let namespace new of override private ' +
+      'protected public readonly return set static super switch this throw try type typeof undefined var while with yield ' +
+      'true false null abstract any boolean number string symbol unknown never object keyof readonly',
+  );
+  const CLike_KEYWORDS = words(
+    'auto break case char const continue default do double else enum extern float for goto if inline int long register ' +
+      'restrict return short signed sizeof static struct switch typedef union unsigned void volatile while class namespace ' +
+      'public private protected template typename virtual override final new delete using try catch throw bool true false ' +
+      'nullptr constexpr decltype noexcept operator friend explicit mutable',
+  );
+  const CSHARP_KEYWORDS = new Set([
+    ...CLike_KEYWORDS,
+    ...words('async await var string decimal object base this foreach out ref params readonly sealed partial record init namespace'),
+  ]);
+  const JAVA_KEYWORDS = words(
+    'abstract assert boolean break byte case catch char class const continue default do double else enum extends final ' +
+      'finally float for goto if implements import instanceof int interface long native new package private protected public ' +
+      'return short static strictfp super switch synchronized this throw throws transient try void volatile while var record ' +
+      'sealed permits yield true false null',
+  );
+  const PYTHON_KEYWORDS = words(
+    'and as assert async await break class continue def del elif else except False finally for from global if import in is ' +
+      'lambda None nonlocal not or pass raise return True try while with yield match case',
+  );
+  const RUBY_KEYWORDS = words(
+    'alias and begin break case class def defined do else elsif end ensure false for if in module next nil not or redo rescue ' +
+      'retry return self super then true undef unless until when while yield require attr_accessor attr_reader',
+  );
+  const PHP_KEYWORDS = words(
+    'abstract and array as break callable case catch class clone const continue declare default do echo else elseif empty ' +
+      'enddeclare endfor endforeach endif endswitch endwhile eval exit extends final finally fn for foreach function global ' +
+      'goto if implements include include_once instanceof insteadof interface isset list match namespace new or print private ' +
+      'protected public readonly require require_once return static switch throw trait try unset use var while xor yield',
+  );
+  const GO_KEYWORDS = words(
+    'break case chan const continue default defer else fallthrough for func go goto if import interface map package range ' +
+      'return select struct switch type var true false nil',
+  );
+  const RUST_KEYWORDS = words(
+    'as async await break const continue crate dyn else enum extern false fn for if impl in let loop match mod move mut pub ' +
+      'ref return self Self static struct super trait true type unsafe use where while',
+  );
+  const KOTLIN_KEYWORDS = words(
+    'as break class continue do else false for fun if in interface is null object package return super this throw true try ' +
+      'typealias typeof val var when while by catch constructor delegate dynamic field file finally get import init param ' +
+      'property receiver set setparam where actual abstract annotation companion const crossinline data enum expect external ' +
+      'final infix inline inner internal lateinit noinline open operator out override private protected public reified sealed ' +
+      'suspend tailrec vararg',
+  );
+  const SWIFT_KEYWORDS = words(
+    'associatedtype class deinit enum extension fileprivate func import init inout internal let open operator private protocol ' +
+      'public rethrows static struct subscript typealias var break case continue default defer do else fallthrough for guard ' +
+      'if in repeat return switch where while as Any catch false is nil super self Self throw throws true try',
+  );
+  const SQL_KEYWORDS = words(
+    'select from where insert into update delete create alter drop table values set join left right inner outer full on group ' +
+      'by order having limit offset union all as and or not null is in like between exists distinct count sum avg min max case ' +
+      'when then else end primary key foreign references index view database begin commit rollback grant revoke',
+  );
+  const SHELL_KEYWORDS = words(
+    'if then else elif fi for while do done case esac function in select until return exit export local readonly declare unset ' +
+    'shift source alias echo printf cd pwd read test true false',
+  );
+  const POWERSHELL_KEYWORDS = words(
+    'if else elseif foreach for while do switch function filter param return try catch finally throw begin process end in break ' +
+    'continue class enum static hidden using var true false null',
+  );
+  const DOCKER_KEYWORDS = words(
+    'FROM RUN CMD LABEL MAINTAINER EXPOSE ENV ADD COPY ENTRYPOINT VOLUME USER WORKDIR ARG ONBUILD STOPSIGNAL HEALTHCHECK SHELL',
+  );
+  const YAML_KEYWORDS = words('true false null yes no on off');
+
+  const LANG_ALIASES = {
+    java: 'java',
+    javascript: 'javascript',
+    js: 'javascript',
+    jsx: 'javascript',
+    mjs: 'javascript',
+    cjs: 'javascript',
+    typescript: 'javascript',
+    ts: 'javascript',
+    tsx: 'javascript',
+    c: 'clike',
+    h: 'clike',
+    cpp: 'clike',
+    'c++': 'clike',
+    cc: 'clike',
+    hpp: 'clike',
+    objc: 'clike',
+    'objective-c': 'clike',
+    csharp: 'csharp',
+    cs: 'csharp',
+    'c#': 'csharp',
+    'f#': 'generic',
+    vb: 'generic',
+    vbnet: 'generic',
+    groovy: 'java',
+    gradle: 'java',
+    python: 'python',
+    py: 'python',
+    ruby: 'ruby',
+    rb: 'ruby',
+    php: 'php',
+    go: 'go',
+    golang: 'go',
+    rust: 'rust',
+    rs: 'rust',
+    kotlin: 'kotlin',
+    kt: 'kotlin',
+    scala: 'kotlin',
+    swift: 'swift',
+    sql: 'sql',
+    mysql: 'sql',
+    pgsql: 'sql',
+    postgres: 'sql',
+    sqlite: 'sql',
+    xml: 'xml',
+    html: 'xml',
+    htm: 'xml',
+    xhtml: 'xml',
+    svg: 'xml',
+    vue: 'xml',
+    svelte: 'xml',
+    json: 'json',
+    jsonc: 'json',
+    yaml: 'yaml',
+    yml: 'yaml',
+    toml: 'toml',
+    ini: 'toml',
+    properties: 'toml',
+    css: 'css',
+    scss: 'css',
+    less: 'css',
+    sh: 'shell',
+    bash: 'shell',
+    zsh: 'shell',
+    shell: 'shell',
+    console: 'shell',
+    powershell: 'powershell',
+    ps1: 'powershell',
+    diff: 'diff',
+    patch: 'diff',
+    dockerfile: 'docker',
+    docker: 'docker',
+    makefile: 'make',
+    mk: 'make',
+    markdown: 'markdown',
+    md: 'markdown',
+    text: 'plain',
+    txt: 'plain',
+  };
+
+  const LANG_CONFIGS = {
+    java: { lineComments: ['//'], blockComments: [['/*', '*/']], strings: ['"', "'"], tripleStrings: ['"""'], keywords: JAVA_KEYWORDS, typeHeuristic: true },
+    javascript: { lineComments: ['//'], blockComments: [['/*', '*/']], strings: ['"', "'", '`'], keywords: JS_KEYWORDS, typeHeuristic: true },
+    clike: { lineComments: ['//'], blockComments: [['/*', '*/']], strings: ['"', "'"], keywords: CLike_KEYWORDS, typeHeuristic: true },
+    csharp: { lineComments: ['//'], blockComments: [['/*', '*/']], strings: ['"', "'"], keywords: CSHARP_KEYWORDS, typeHeuristic: true },
+    python: { lineComments: ['#'], strings: ['"', "'"], tripleStrings: ['"""', "'''"], keywords: PYTHON_KEYWORDS, typeHeuristic: false },
+    ruby: { lineComments: ['#'], strings: ['"', "'"], keywords: RUBY_KEYWORDS, typeHeuristic: false },
+    php: { lineComments: ['//', '#'], blockComments: [['/*', '*/']], strings: ['"', "'"], keywords: PHP_KEYWORDS, typeHeuristic: false },
+    go: { lineComments: ['//'], blockComments: [['/*', '*/']], strings: ['"', "'", '`'], keywords: GO_KEYWORDS, typeHeuristic: true },
+    rust: { lineComments: ['//'], blockComments: [['/*', '*/']], strings: ['"', "'"], keywords: RUST_KEYWORDS, typeHeuristic: true },
+    kotlin: { lineComments: ['//'], blockComments: [['/*', '*/']], strings: ['"', "'"], tripleStrings: ['"""'], keywords: KOTLIN_KEYWORDS, typeHeuristic: true },
+    swift: { lineComments: ['//'], blockComments: [['/*', '*/']], strings: ['"', "'"], tripleStrings: ['"""'], keywords: SWIFT_KEYWORDS, typeHeuristic: true },
+    sql: { lineComments: ['--'], blockComments: [['/*', '*/']], strings: ["'", '"'], keywords: SQL_KEYWORDS, caseInsensitive: true, typeHeuristic: false },
+    shell: { lineComments: ['#'], strings: ['"', "'"], keywords: SHELL_KEYWORDS, variables: true, typeHeuristic: false },
+    powershell: { lineComments: ['#'], strings: ['"', "'"], keywords: POWERSHELL_KEYWORDS, variables: true, typeHeuristic: false },
+    docker: { lineComments: ['#'], strings: ['"', "'"], keywords: DOCKER_KEYWORDS, typeHeuristic: false },
+    make: { lineComments: ['#'], strings: ['"', "'"], keywords: words('include define ifeq ifneq ifdef ifndef else endif export unexport override'),
+      typeHeuristic: false },
+    css: { blockComments: [['/*', '*/']], strings: ['"', "'"], keywords: words('important media supports keyframes font-face import charset namespace'),
+      propertyHeuristic: true, typeHeuristic: false },
+    yaml: { lineComments: ['#'], strings: ['"', "'"], keywords: YAML_KEYWORDS, typeHeuristic: false },
+    toml: { lineComments: ['#'], strings: ['"', "'"], keywords: words('true false'), propertyHeuristic: true, typeHeuristic: false },
+    markdown: { lineComments: [], strings: [], typeHeuristic: false },
+    plain: { lineComments: [], strings: [], typeHeuristic: false },
+    generic: { lineComments: ['//'], blockComments: [['/*', '*/']], strings: ['"', "'"], typeHeuristic: false },
+  };
+
+  function resolveLanguage(raw) {
+    const key = String(raw === undefined || raw === null ? '' : raw).trim().toLowerCase();
+    if (key === '') return '';
+    return LANG_ALIASES[key] || 'generic';
+  }
+
+  function emitHtml(out, text, className) {
+    if (!text) return out;
+    return out + (className ? '<span class="' + className + '">' + escapeHtml(text) + '</span>' : escapeHtml(text));
+  }
+
+  /** 扫描带转义的字符串，返回结束下标（不包含结束引号本身时按调用约定处理）。 */
+  function scanStringEnd(code, start, quote, multiline) {
+    let index = start + quote.length;
+    while (index < code.length) {
+      if (code[index] === '\\') {
+        index += 2;
+        continue;
+      }
+      if (code.startsWith(quote, index)) return index + quote.length;
+      if (!multiline && code[index] === '\n') return index;
+      index += 1;
+    }
+    return code.length;
+  }
+
+  /** 通用语言高亮：注释、字符串、数字、关键字、函数、类型、操作符。 */
+  function highlightGeneric(code, config) {
+    const cfg = config || LANG_CONFIGS.generic;
+    const keywords = cfg.keywords instanceof Set ? cfg.keywords : words('');
+    const out = [];
+    let i = 0;
+    const length = code.length;
+    while (i < length) {
+      const rest = code.slice(i);
+      let matched = false;
+
+      for (const [open, close] of cfg.blockComments || []) {
+        if (rest.startsWith(open)) {
+          const found = code.indexOf(close, i + open.length);
+          const end = found < 0 ? length : found + close.length;
+          out.push(emitHtml('', code.slice(i, end), 'tok-comment'));
+          i = end;
+          matched = true;
+          break;
+        }
+      }
+      if (matched) continue;
+
+      for (const marker of cfg.lineComments || []) {
+        if (rest.startsWith(marker)) {
+          let end = code.indexOf('\n', i);
+          if (end < 0) end = length;
+          out.push(emitHtml('', code.slice(i, end), 'tok-comment'));
+          i = end;
+          matched = true;
+          break;
+        }
+      }
+      if (matched) continue;
+
+      for (const quote of cfg.tripleStrings || []) {
+        if (rest.startsWith(quote)) {
+          const end = scanStringEnd(code, i, quote, true);
+          out.push(emitHtml('', code.slice(i, end), 'tok-string'));
+          i = end;
+          matched = true;
+          break;
+        }
+      }
+      if (matched) continue;
+
+      for (const quote of cfg.strings || []) {
+        if (rest.startsWith(quote)) {
+          const end = scanStringEnd(code, i, quote, quote === '`');
+          out.push(emitHtml('', code.slice(i, end), 'tok-string'));
+          i = end;
+          matched = true;
+          break;
+        }
+      }
+      if (matched) continue;
+
+      if (cfg.variables) {
+        const variable = /^\$\{[^}\n]*\}|\$[A-Za-z_]\w*/.exec(rest);
+        if (variable) {
+          out.push(emitHtml('', variable[0], 'tok-variable'));
+          i += variable[0].length;
+          continue;
+        }
+      }
+
+      const number = /^(?:0[xX][0-9a-fA-F]+|0[bB][01]+|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?(?:[fFdDlLuU]+)?)/.exec(rest);
+      if (number) {
+        out.push(emitHtml('', number[0], 'tok-number'));
+        i += number[0].length;
+        continue;
+      }
+
+      const annotation = /^@[A-Za-z_]\w*/.exec(rest);
+      if (annotation) {
+        out.push(emitHtml('', annotation[0], 'tok-annotation'));
+        i += annotation[0].length;
+        continue;
+      }
+
+      const identifier = /^[A-Za-z_$][A-Za-z0-9_$]*/.exec(rest);
+      if (identifier) {
+        const word = identifier[0];
+        const probe = cfg.caseInsensitive ? word.toLowerCase() : word;
+        const after = code.slice(i + word.length);
+        let className = '';
+        if (keywords.has(probe)) className = 'tok-keyword';
+        else if (/^(?:true|false|null|nil|None|undefined)$/.test(word)) className = 'tok-bool';
+        else if (cfg.propertyHeuristic && /^\s*:/.test(after)) className = 'tok-attr';
+        else if (cfg.typeHeuristic && /^[A-Z]/.test(word) && /^[A-Za-z0-9_$]*$/.test(word)) className = 'tok-type';
+        else if (/^\s*\(/.test(after)) className = 'tok-function';
+        out.push(emitHtml('', word, className));
+        i += word.length;
+        continue;
+      }
+
+      const operator = /^(?:===|!==|=>|->|::|==|!=|<=|>=|&&|\|\||\+\+|--|\+=|-=|\*=|\/=|%=|\*\*|[+\-*/%=<>!&|^~?:])/.exec(rest);
+      if (operator) {
+        out.push(emitHtml('', operator[0], 'tok-operator'));
+        i += operator[0].length;
+        continue;
+      }
+
+      out.push(escapeHtml(rest[0]));
+      i += 1;
+    }
+    return out.join('');
+  }
+
+  /** XML / HTML 高亮：标签、属性、属性值、注释、CDATA、实体。 */
+  function highlightXml(code) {
+    let out = '';
+    let i = 0;
+    const length = code.length;
+    while (i < length) {
+      if (code.startsWith('<!--', i)) {
+        const found = code.indexOf('-->', i + 4);
+        const end = found < 0 ? length : found + 3;
+        out = emitHtml(out, code.slice(i, end), 'tok-comment');
+        i = end;
+        continue;
+      }
+      if (code.startsWith('<![CDATA[', i)) {
+        const found = code.indexOf(']]>', i + 9);
+        const end = found < 0 ? length : found + 3;
+        out = emitHtml(out, code.slice(i, end), 'tok-string');
+        i = end;
+        continue;
+      }
+      if (code.startsWith('<?', i) || code.startsWith('<!', i)) {
+        const found = code.indexOf('>', i + 2);
+        const end = found < 0 ? length : found + 1;
+        out = emitHtml(out, code.slice(i, end), 'tok-meta');
+        i = end;
+        continue;
+      }
+      if (code[i] === '<') {
+        let j = i + 1;
+        let closing = false;
+        if (code[j] === '/') {
+          closing = true;
+          j += 1;
+        }
+        const name = /^[A-Za-z_][\w:.-]*/.exec(code.slice(j));
+        if (!name) {
+          out = emitHtml(out, '<', '');
+          i += 1;
+          continue;
+        }
+        out = emitHtml(out, (closing ? '</' : '<') + name[0], 'tok-tag');
+        j += name[0].length;
+        while (j < length) {
+          const rest = code.slice(j);
+          const whitespace = /^\s+/.exec(rest);
+          if (whitespace) {
+            out = emitHtml(out, whitespace[0], '');
+            j += whitespace[0].length;
+            continue;
+          }
+          if (rest.startsWith('/>')) {
+            out = emitHtml(out, '/>', 'tok-operator');
+            j += 2;
+            break;
+          }
+          if (rest[0] === '>') {
+            out = emitHtml(out, '>', '');
+            j += 1;
+            break;
+          }
+          const attribute = /^[A-Za-z_:][\w:.-]*/.exec(rest);
+          if (attribute) {
+            out = emitHtml(out, attribute[0], 'tok-attr');
+            j += attribute[0].length;
+            continue;
+          }
+          if (rest[0] === '=') {
+            out = emitHtml(out, '=', 'tok-operator');
+            j += 1;
+            continue;
+          }
+          if (rest[0] === '"' || rest[0] === "'") {
+            const end = scanStringEnd(code, j, rest[0], true);
+            out = emitHtml(out, code.slice(j, end), 'tok-string');
+            j = end;
+            continue;
+          }
+          out = emitHtml(out, rest[0], '');
+          j += 1;
+        }
+        i = j;
+        continue;
+      }
+      let next = code.indexOf('<', i);
+      if (next < 0) next = length;
+      const text = code.slice(i, next);
+      const entityPattern = /&(?:#\d+|#x[\da-f]+|[a-z][\w]*);/gi;
+      let cursor = 0;
+      let match;
+      while ((match = entityPattern.exec(text)) !== null) {
+        out = emitHtml(out, text.slice(cursor, match.index), '');
+        out = emitHtml(out, match[0], 'tok-meta');
+        cursor = match.index + match[0].length;
+      }
+      out = emitHtml(out, text.slice(cursor), '');
+      i = next;
+    }
+    return out;
+  }
+
+  /** JSON / JSONC 高亮：key、字符串、数字、布尔、注释。 */
+  function highlightJson(code) {
+    let out = '';
+    let i = 0;
+    while (i < code.length) {
+      const rest = code.slice(i);
+      if (rest.startsWith('//')) {
+        let end = code.indexOf('\n', i);
+        if (end < 0) end = code.length;
+        out = emitHtml(out, code.slice(i, end), 'tok-comment');
+        i = end;
+        continue;
+      }
+      if (rest.startsWith('/*')) {
+        const found = code.indexOf('*/', i + 2);
+        const end = found < 0 ? code.length : found + 2;
+        out = emitHtml(out, code.slice(i, end), 'tok-comment');
+        i = end;
+        continue;
+      }
+      if (rest[0] === '"') {
+        const end = scanStringEnd(code, i, '"', false);
+        const after = code.slice(end);
+        out = emitHtml(out, code.slice(i, end), /^\s*:/.test(after) ? 'tok-key' : 'tok-string');
+        i = end;
+        continue;
+      }
+      const number = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/.exec(rest);
+      if (number) {
+        out = emitHtml(out, number[0], 'tok-number');
+        i += number[0].length;
+        continue;
+      }
+      const boolean = /^(?:true|false|null)\b/.exec(rest);
+      if (boolean) {
+        out = emitHtml(out, boolean[0], 'tok-bool');
+        i += boolean[0].length;
+        continue;
+      }
+      if (/\s/.test(rest[0])) {
+        out = emitHtml(out, rest[0], '');
+      } else {
+        out = emitHtml(out, rest[0], 'tok-operator');
+      }
+      i += 1;
+    }
+    return out;
+  }
+
+  /** diff / patch 高亮：增删行与 hunk 头。 */
+  function highlightDiff(code) {
+    const lines = code.split('\n');
+    const rendered = lines.map((line) => {
+      if (/^\+\+\+|^---/.test(line)) return emitHtml('', line, 'tok-meta');
+      if (/^@@/.test(line)) return emitHtml('', line, 'tok-meta');
+      if (line.startsWith('+')) return emitHtml('', line, 'tok-added');
+      if (line.startsWith('-')) return emitHtml('', line, 'tok-removed');
+      return emitHtml('', line, '');
+    });
+    return rendered.join(escapeHtml('\n'));
+  }
+
+  /**
+   * 代码块语法高亮入口：返回已经转义的 HTML。
+   * 只有可识别的语言才会高亮；未知语言退化为通用高亮。
+   */
+  function highlightCode(code, language) {
+    const source = String(code === undefined || code === null ? '' : code);
+    if (source === '') return '';
+    const lang = resolveLanguage(language);
+    if (lang === '') return escapeHtml(source);
+    if (lang === 'xml') return highlightXml(source);
+    if (lang === 'json') return highlightJson(source);
+    if (lang === 'diff') return highlightDiff(source);
+    if (lang === 'plain') return escapeHtml(source);
+    if (lang === 'markdown') return escapeHtml(source);
+    return highlightGeneric(source, LANG_CONFIGS[lang] || LANG_CONFIGS.generic);
+  }
+
   return {
     render,
     htmlToMarkdown,
     inline,
     escapeHtml,
+    highlightCode,
+    resolveLanguage,
   };
 })();
 
@@ -1228,7 +1735,7 @@ html[data-platform="darwin"] .mn-root{padding-top:var(--dsh-frame-top-clearance,
 .mn-source-input::-webkit-scrollbar,.mn-rich::-webkit-scrollbar{width:10px;height:10px}
 .mn-source-input::-webkit-scrollbar-thumb,.mn-rich::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--dsw-alias-label-secondary,#6b6b70) 26%,transparent);border:2px solid transparent;background-clip:content-box;border-radius:6px}
 .mn-editor-wrap{flex:1 1 auto;min-height:0;min-width:0;display:flex;position:relative}
-.mn-rich{flex:1 1 auto;min-height:0;overflow:auto;padding:18px 26px 44px;outline:none;font-size:14px;line-height:1.78;word-break:break-word;color:var(--dsw-alias-label-primary,#1d1d1f)}
+.mn-rich{--mn-block-border:color-mix(in srgb,var(--dsw-alias-label-secondary,#6b6b70) 46%,transparent);flex:1 1 auto;min-height:0;overflow:auto;padding:18px 26px 44px;outline:none;font-size:14px;line-height:1.78;word-break:break-word;color:var(--dsw-alias-label-primary,#1d1d1f)}
 .mn-rich:empty:before{content:attr(data-placeholder);color:var(--dsw-alias-label-secondary,#8a8a90);pointer-events:none}
 .mn-rich > *:first-child{margin-top:0}
 .mn-rich h1,.mn-rich h2,.mn-rich h3,.mn-rich h4,.mn-rich h5,.mn-rich h6{margin:1.2em 0 .55em;line-height:1.35;font-weight:650;color:var(--dsw-alias-label-primary,#1d1d1f)}
@@ -1246,8 +1753,21 @@ html[data-platform="darwin"] .mn-root{padding-top:var(--dsh-frame-top-clearance,
 .mn-rich li > ul,.mn-rich li > ol{margin:.2em 0}
 .mn-rich blockquote{margin:.8em 0;padding:.15em 0 .15em 1em;border-left:3px solid color-mix(in srgb,var(--dsw-alias-brand-primary,#2f6bff) 55%,transparent);color:var(--dsw-alias-label-secondary,#55555a);background:color-mix(in srgb,var(--dsw-alias-brand-primary,#2f6bff) 4%,transparent);border-radius:0 6px 6px 0}
 .mn-rich code{font-family:"Cascadia Mono",Consolas,"SF Mono","Courier New",monospace;font-size:.88em;background:var(--dsw-alias-bg-layer-2,rgba(0,0,0,.06));padding:.12em .38em;border-radius:4px}
-.mn-rich pre{margin:.8em 0;padding:12px 14px;background:var(--dsw-alias-bg-layer-1,#f6f6f7);border:1px solid var(--dsw-alias-border-l1,rgba(0,0,0,.08));border-radius:8px;overflow:auto;line-height:1.6}
+.mn-rich pre{margin:.8em 0;padding:12px 14px;background:var(--dsw-alias-bg-layer-1,#f6f6f7);border:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.22));border-color:var(--mn-block-border);border-radius:8px;overflow:auto;line-height:1.6}
 .mn-rich pre code{background:transparent;padding:0;font-size:12.5px;white-space:pre}
+.mn-rich .tok-comment{color:var(--dsw-alias-label-secondary,#6b6b70);font-style:italic;opacity:.88}
+.mn-rich .tok-keyword{color:var(--dsw-alias-brand-primary,#2f6bff);font-weight:600}
+.mn-rich .tok-string{color:var(--dsw-alias-state-success-primary,#2e7d32)}
+.mn-rich .tok-number,.mn-rich .tok-bool{color:var(--dsw-alias-state-warn-primary,#b7791f)}
+.mn-rich .tok-function{color:color-mix(in srgb,var(--dsw-alias-brand-primary,#2f6bff) 68%,var(--dsw-alias-label-primary,#1d1d1f))}
+.mn-rich .tok-type{color:color-mix(in srgb,var(--dsw-alias-state-success-primary,#2e7d32) 62%,var(--dsw-alias-label-primary,#1d1d1f))}
+.mn-rich .tok-annotation,.mn-rich .tok-variable{color:var(--dsw-alias-state-error-primary,#c62828)}
+.mn-rich .tok-tag{color:var(--dsw-alias-state-error-primary,#c62828);font-weight:600}
+.mn-rich .tok-attr{color:var(--dsw-alias-state-warn-primary,#b7791f)}
+.mn-rich .tok-key{color:var(--dsw-alias-brand-primary,#2f6bff)}
+.mn-rich .tok-meta,.mn-rich .tok-operator{color:var(--dsw-alias-label-secondary,#6b6b70)}
+.mn-rich .tok-added{color:var(--dsw-alias-state-success-primary,#2e7d32)}
+.mn-rich .tok-removed{color:var(--dsw-alias-state-error-primary,#c62828)}
 .mn-rich hr{margin:1.3em 0;border:0;border-top:1px solid var(--dsw-alias-border-l1,rgba(0,0,0,.12))}
 .mn-rich img{max-width:100%;height:auto;border-radius:8px;border:1px solid var(--dsw-alias-border-l1,rgba(0,0,0,.08));margin:.35em 0;display:block;user-select:none;-webkit-user-drag:none;cursor:pointer;transition:box-shadow .12s ease}
 .mn-rich img:hover{box-shadow:0 0 0 2px color-mix(in srgb,var(--dsw-alias-brand-primary,#2f6bff) 45%,transparent)}
@@ -1270,10 +1790,10 @@ html[data-platform="darwin"] .mn-root{padding-top:var(--dsh-frame-top-clearance,
 .mn-rich mark{background:color-mix(in srgb,var(--dsw-alias-state-warn-primary,#f0b429) 32%,transparent);color:inherit;padding:0 .12em;border-radius:3px}
 .mn-rich .mn-task{width:14px;height:14px;margin:0 .35em 0 0;vertical-align:-2px;accent-color:var(--dsw-alias-brand-primary,#2f6bff)}
 .mn-rich .mn-task-item{list-style:none;margin-left:-1.2em}
-.mn-rich .mn-table-wrap{overflow:auto;margin:.8em 0;border:1px solid var(--dsw-alias-border-l1,rgba(0,0,0,.1));border-radius:8px}
+.mn-rich .mn-table-wrap{overflow:auto;margin:.8em 0;border:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.22));border-color:var(--mn-block-border);border-radius:8px}
 .mn-rich table{border-collapse:collapse;width:100%;font-size:13px}
-.mn-rich th,.mn-rich td{border-bottom:1px solid var(--dsw-alias-border-l1,rgba(0,0,0,.07));border-right:1px solid var(--dsw-alias-border-l1,rgba(0,0,0,.07));padding:7px 10px;text-align:left;vertical-align:top}
-.mn-rich th{background:var(--dsw-alias-bg-layer-1,#f6f6f7);font-weight:600}
+.mn-rich th,.mn-rich td{border-bottom:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.2));border-right:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.2));border-color:color-mix(in srgb,var(--dsw-alias-label-secondary,#6b6b70) 38%,transparent);padding:7px 10px;text-align:left;vertical-align:top}
+.mn-rich th{background:var(--dsw-alias-bg-layer-1,#f6f6f7);font-weight:600;border-bottom-color:color-mix(in srgb,var(--dsw-alias-label-secondary,#6b6b70) 58%,transparent)}
 .mn-rich tr:last-child td{border-bottom:0}
 .mn-rich th:last-child,.mn-rich td:last-child{border-right:0}
 
@@ -2181,7 +2701,22 @@ function collectRenderedSegments(block) {
       const value = node.nodeValue || '';
       // 块与块之间由 renderer 用换行分隔，这类纯空白的格式化文本节点
       // 不是源码行，不能当空行段，否则会让 blockquote / 表格后的行号整体错位。
-      if (value.trim() === '') return;
+      // 注意：代码高亮会把代码拆成多个 span，span 之间的空格 / 换行是真实代码，
+      // 必须保留；纯空格（不含换行）也是行内格式之间的有效文本。
+      if (value.trim() === '') {
+        let inCode = false;
+        let current = node.parentElement;
+        while (current) {
+          const parentTag = current.tagName ? String(current.tagName).toUpperCase() : '';
+          if (parentTag === 'PRE' || parentTag === 'CODE') {
+            inCode = true;
+            break;
+          }
+          if (current === block) break;
+          current = current.parentElement;
+        }
+        if (!inCode && value.indexOf('\n') !== -1) return;
+      }
       let start = 0;
       for (let index = 0; index < value.length; index += 1) {
         if (value[index] === '\n') {

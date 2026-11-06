@@ -274,6 +274,7 @@ check('AppPage renders the note workspace', () => {
     'split',
     true,
     0.5,
+    false,
     null,
     '',
     null,
@@ -305,10 +306,42 @@ check('AppPage renders the note workspace', () => {
 check('AppPage renders the empty state', () => {
   const env = makeEnv();
   const emptyState = { settings: fakeSettings, tree: [], stats: { notes: 0, folders: 0 }, favorites: [], lastOpened: null };
-  env.reset([false, '', emptyState, new Set(), 'source', false, 0.5, null, '', null, false, null, false, 'saved', null, '', 'source', null, null, null, 0]);
+  env.reset([false, '', emptyState, new Set(), 'source', false, 0.5, false, null, '', null, false, null, false, 'saved', null, '', 'source', null, null, null, 0]);
   const element = deepRender(env, env.MN.AppPage({ pickDirectory: null }));
   assert.ok(hasClass(element, 'mn-root'));
   assert.ok(hasClass(element, 'mn-empty'));
+});
+
+check('AppPage collapses and expands the file sidebar', () => {
+  const env = makeEnv();
+  env.reset([
+    false,
+    '',
+    fakeState,
+    new Set(['工作']),
+    'split',
+    false,
+    0.5,
+    true,
+    null,
+    '',
+    null,
+    false,
+    fakeNote,
+    false,
+    'saved',
+    Date.now(),
+    '',
+    'source',
+    null,
+    null,
+    null,
+    0,
+  ]);
+  const element = deepRender(env, env.MN.AppPage({ pickDirectory: null }));
+  assert.ok(!hasClass(element, 'mn-side'));
+  assert.ok(hasClass(element, 'mn-side-expand'));
+  assert.ok(hasClass(element, 'mn-main'));
 });
 
 check('TreeView renders folders, notes and favorites', () => {

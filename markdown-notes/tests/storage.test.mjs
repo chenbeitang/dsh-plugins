@@ -69,6 +69,24 @@ try {
   assert.equal(search.items.length, 1);
   assert.equal(search.items[0].path, renamedNote.path);
 
+  const archive = await store.createFolder('', '归档');
+  const moved = await store.moveEntry(renamedNote.path, archive.path);
+  assert.equal(moved.path, '归档/周报-第 1 周.md');
+  state = await store.state();
+  assert.deepEqual(state.favorites, ['归档/周报-第 1 周.md']);
+  const noteLocation = await store.entryLocation(moved.path);
+  assert.equal(noteLocation.isDirectory, false);
+  const folderLocation = await store.entryLocation('项目');
+  assert.equal(folderLocation.isDirectory, true);
+
+  let rejectedMove = false;
+  try {
+    await store.moveEntry('项目', '项目/子目录');
+  } catch (error) {
+    rejectedMove = error instanceof NotesError && error.code === 'invalid-target';
+  }
+  assert.equal(rejectedMove, true);
+
   const uploaded = await store.uploadImage({ name: 'pixel.png', mime: 'image/png', data: PNG_PIXEL });
   assert.match(uploaded.path, /^assets\/\d{4}-\d{2}\//);
   const media = await store.readMedia(uploaded.path);

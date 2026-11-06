@@ -23,10 +23,18 @@ MN.TreeNode = function TreeNode(props) {
           style: { paddingLeft: 4 + depth * 14 },
           role: 'button',
           tabIndex: 0,
+          draggable: true,
           'aria-expanded': open ? 'true' : 'false',
+          'data-dragging': props.draggingPath === node.path ? 'true' : undefined,
+          'data-drop-target': props.dropTarget === node.path ? 'true' : undefined,
           title: node.path,
           onClick: () => props.onToggle(node.path),
           onContextMenu: (event) => props.onMenu(event, node),
+          onDragStart: (event) => props.onDragStart(event, node),
+          onDragEnd: props.onDragEnd,
+          onDragOver: (event) => props.onDragOver(event, node.path),
+          onDragLeave: (event) => props.onDragLeave(event, node.path),
+          onDrop: (event) => props.onDrop(event, node.path),
           onKeyDown: (event) => {
             if (event.key === 'Enter' || event.key === ' ') {
               event.preventDefault();
@@ -110,6 +118,13 @@ MN.TreeNode = function TreeNode(props) {
                     onNewNote: props.onNewNote,
                     onNewFolder: props.onNewFolder,
                     onFavorite: props.onFavorite,
+                    draggingPath: props.draggingPath,
+                    dropTarget: props.dropTarget,
+                    onDragStart: props.onDragStart,
+                    onDragEnd: props.onDragEnd,
+                    onDragOver: props.onDragOver,
+                    onDragLeave: props.onDragLeave,
+                    onDrop: props.onDrop,
                   }),
                 ),
           )
@@ -124,11 +139,15 @@ MN.TreeNode = function TreeNode(props) {
       className: 'mn-row',
       style: { paddingLeft: 4 + depth * 14 },
       'data-active': active ? 'true' : 'false',
+      'data-dragging': props.draggingPath === node.path ? 'true' : undefined,
       role: 'button',
       tabIndex: 0,
+      draggable: true,
       title: node.path,
       onClick: () => props.onOpen(node.path),
       onContextMenu: (event) => props.onMenu(event, node),
+      onDragStart: (event) => props.onDragStart(event, node),
+      onDragEnd: props.onDragEnd,
       onKeyDown: (event) => {
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
@@ -180,6 +199,8 @@ MN.TreeNode = function TreeNode(props) {
 /** 目录树主体：收藏区 + 全部笔记。 */
 MN.TreeView = function TreeView(props) {
   const t = MN.t;
+  const [draggingPath, setDraggingPath] = useState(null);
+  const [dropTarget, setDropTarget] = useState(null);
   const favoriteNotes = useMemo(() => {
     const out = [];
     for (const path of props.favorites) {
@@ -188,6 +209,64 @@ MN.TreeView = function TreeView(props) {
     }
     return out;
   }, [props.favorites, props.allTree]);
+
+  const canDropOn = (targetPath) => {
+    if (!draggingPath || !targetPath) return false;
+    if (targetPath === draggingPath) return false;
+    if (MN.dirnameOf(draggingPath) === targetPath) return false;
+    // 不能把文件夹拖进自身或它的子级目录。
+    if (MN.isSameOrDescendant(targetPath, draggingPath)) return false;
+    return true;
+  };
+
+  const handleDragStart = (event, node) => {
+    if (event.target && typeof event.target.closest === 'function' && event.target.closest('button')) {
+      event.preventDefault();
+      return;
+    }
+    if (!event.dataTransfer) return;
+    setDraggingPath(node.path);
+    setDropTarget(null);
+    event.dataTransfer.effectAllowed = 'move';
+    try {
+      event.dataTransfer.setData('text/plain', node.path);
+    } catch (error) {
+      /* 某些环境禁止 setData，不影响内部状态 */
+    }
+  };
+
+  const handleDragEnd = () => {
+    setDraggingPath(null);
+    setDropTarget(null);
+  };
+
+  const handleDragOver = (event, targetPath) => {
+    if (!canDropOn(targetPath)) {
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'none';
+      if (dropTarget === targetPath) setDropTarget(null);
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+    if (dropTarget !== targetPath) setDropTarget(targetPath);
+  };
+
+  const handleDragLeave = (event, targetPath) => {
+    const related = event.relatedTarget;
+    if (related && event.currentTarget && event.currentTarget.contains(related)) return;
+    if (dropTarget === targetPath) setDropTarget(null);
+  };
+
+  const handleDrop = (event, targetPath) => {
+    if (!canDropOn(targetPath)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const source = draggingPath || (event.dataTransfer ? event.dataTransfer.getData('text/plain') : '');
+    setDraggingPath(null);
+    setDropTarget(null);
+    if (source) props.onMove(source, targetPath);
+  };
 
   const rowProps = {
     expanded: props.expanded,
@@ -200,6 +279,13 @@ MN.TreeView = function TreeView(props) {
     onNewNote: props.onNewNote,
     onNewFolder: props.onNewFolder,
     onFavorite: props.onFavorite,
+    draggingPath,
+    dropTarget,
+    onDragStart: handleDragStart,
+    onDragEnd: handleDragEnd,
+    onDragOver: handleDragOver,
+    onDragLeave: handleDragLeave,
+    onDrop: handleDrop,
   };
 
   if (props.allTree.length === 0) {

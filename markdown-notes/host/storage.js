@@ -555,6 +555,90 @@ export class NotesStore {
     });
   }
 
+  /** 读取条目位置（供“在文件管理器中打开”使用；不把绝对路径返回给浏览器）。 */
+  async entryLocation(rel) {
+    await this.ensure();
+    const target = resolveRel(this.root, rel);
+    if (target.rel === '') throw new NotesError('invalid-path', '不能对笔记根目录执行该操作');
+    let info;
+    try {
+      info = await fsp.lstat(target.abs);
+    } catch (error) {
+      throw asNotesError(error);
+    }
+    if (info.isSymbolicLink()) throw new NotesError('unsupported', '不支持符号链接');
+    return {
+      path: target.rel,
+      absPath: target.abs,
+      isDirectory: info.isDirectory(),
+      parentPath: path.dirname(target.abs),
+    };
+  }
+
+  /** 把笔记或目录移动到另一个目录（禁止移动到自身 / 子级目录）。 */
+  async moveEntry(rel, targetDirRel) {
+    return this._enqueue(async () => {
+      await this.ensure();
+      const source = resolveRel(this.root, rel);
+      if (source.rel === '') throw new NotesError('invalid-path', '不能移动笔记根目录');
+      const targetDir = resolveRel(this.root, targetDirRel === undefined || targetDirRel === null ? '' : targetDirRel, {
+        allowRoot: true,
+      });
+      let info;
+      try {
+        info = await fsp.lstat(source.abs);
+      } catch (error) {
+        throw asNotesError(error);
+      }
+      if (info.isSymbolicLink()) throw new NotesError('unsupported', '不支持移动符号链接');
+      if (!info.isDirectory() && !info.isFile()) throw new NotesError('unsupported', '不支持的条目类型');
+      if (info.isDirectory() && (targetDir.rel === source.rel || targetDir.rel.startsWith(`${source.rel}/`))) {
+        throw new NotesError('invalid-target', '不能把文件夹移动到自身或它的子级目录');
+      }
+      let dirInfo;
+      try {
+        dirInfo = await fsp.stat(targetDir.abs);
+      } catch (error) {
+        throw asNotesError(error);
+      }
+      if (!dirInfo.isDirectory()) throw new NotesError('invalid-target', '目标不是文件夹');
+      const parentRel = source.rel.includes('/') ? source.rel.slice(0, source.rel.lastIndexOf('/')) : '';
+      if (parentRel === targetDir.rel) throw new NotesError('noop', '已经在该文件夹中');
+      const fileName = path.basename(source.abs);
+      const targetAbs = path.join(targetDir.abs, fileName);
+      if (existsSync(targetAbs)) throw new NotesError('exists', '目标文件夹已有同名文件或文件夹');
+      try {
+        await fsp.rename(source.abs, targetAbs);
+      } catch (error) {
+        throw asNotesError(error);
+      }
+      const targetRel = targetDir.rel === '' ? fileName : `${targetDir.rel}/${fileName}`;
+      const meta = await this._loadMeta();
+      let changed = false;
+      meta.favorites = meta.favorites.map((item) => {
+        const mapped = remapPath(item, source.rel, targetRel);
+        if (mapped !== item) changed = true;
+        return mapped;
+      });
+      if (meta.lastOpened !== null) {
+        const mapped = remapPath(meta.lastOpened, source.rel, targetRel);
+        if (mapped !== meta.lastOpened) {
+          meta.lastOpened = mapped;
+          changed = true;
+        }
+      }
+      if (changed) await this._saveMeta();
+      return {
+        path: targetRel,
+        oldPath: source.rel,
+        name: info.isDirectory() ? fileName : displayNameOf(fileName),
+        fileName,
+        type: info.isDirectory() ? 'folder' : 'note',
+        targetDir: targetDir.rel,
+      };
+    });
+  }
+
   /** 删除笔记或目录（目录递归删除）。 */
   async deleteEntry(rel) {
     return this._enqueue(async () => {

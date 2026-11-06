@@ -28,6 +28,11 @@ MN.Icon = function Icon(props) {
       children.push(h('path', { key: 'b', d: 'M15 3.5V7h3.5' }));
       children.push(h('path', { key: 'c', d: 'M9 11h6M9 14.5h6M9 18h3.5' }));
       break;
+    case 'panel-left':
+      children.push(h('rect', { key: 'a', x: 3.5, y: 4.5, width: 17, height: 15, rx: 2 }));
+      children.push(h('path', { key: 'b', d: 'M9.2 4.5v15' }));
+      children.push(h('path', { key: 'c', d: 'M5.9 9h1.2M5.9 12h1.2M5.9 15h1.2' }));
+      break;
     case 'folder':
       children.push(h('path', { key: 'a', d: 'M3.5 7.5a2 2 0 0 1 2-2h4l2 2.2h7a2 2 0 0 1 2 2v8.8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z' }));
       break;

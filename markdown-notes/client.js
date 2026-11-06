@@ -20,7 +20,7 @@ window.__ModuleLoader__.load({
     /** 本包 Client 侧唯一命名空间：各 part 只往这里挂方法/组件。 */
     const MN = {
       id: 'markdown-notes',
-      version: '1.4.0',
+      version: '1.6.0',
       React,
       h,
       useState,
@@ -980,6 +980,11 @@ MN.Icon = function Icon(props) {
       children.push(h('path', { key: 'b', d: 'M15 3.5V7h3.5' }));
       children.push(h('path', { key: 'c', d: 'M9 11h6M9 14.5h6M9 18h3.5' }));
       break;
+    case 'panel-left':
+      children.push(h('rect', { key: 'a', x: 3.5, y: 4.5, width: 17, height: 15, rx: 2 }));
+      children.push(h('path', { key: 'b', d: 'M9.2 4.5v15' }));
+      children.push(h('path', { key: 'c', d: 'M5.9 9h1.2M5.9 12h1.2M5.9 15h1.2' }));
+      break;
     case 'folder':
       children.push(h('path', { key: 'a', d: 'M3.5 7.5a2 2 0 0 1 2-2h4l2 2.2h7a2 2 0 0 1 2 2v8.8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z' }));
       break;
@@ -1124,7 +1129,11 @@ html[data-platform="darwin"] .mn-root{padding-top:var(--dsh-frame-top-clearance,
 .mn-root button,.mn-root input,.mn-root textarea{font-family:inherit}
 .mn-side{flex:none;width:var(--mn-side);min-width:0;display:flex;flex-direction:column;min-height:0;border-right:1px solid var(--dsw-alias-border-l1,rgba(0,0,0,.08));background:var(--dsw-specific-sidebar-fill,var(--dsw-alias-bg-layer-1,#f7f7f8))}
 .mn-side-head{flex:none;display:flex;align-items:center;gap:6px;padding:12px 12px 8px}
-.mn-side-title{font-size:14px;font-weight:600;letter-spacing:.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mn-side-collapse{flex:none;margin-right:-2px}
+.mn-side-expand{position:absolute;left:8px;top:10px;z-index:12;width:30px;height:30px;border:1px solid var(--dsw-alias-border-l1,rgba(0,0,0,.12));border-radius:8px;background:var(--dsw-alias-bg-overlay,#fff);box-shadow:0 2px 8px rgba(0,0,0,.12);color:var(--dsw-alias-label-secondary,#6b6b70);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:background .12s ease,color .12s ease,border-color .12s ease}
+.mn-side-expand:hover{color:var(--dsw-alias-label-primary,#1d1d1f);background:var(--dsw-alias-bg-layer-2,rgba(0,0,0,.05));border-color:var(--dsw-alias-border-l2,rgba(0,0,0,.2))}
+.mn-root[data-side-collapsed="true"] .mn-head{padding-left:48px}
+.mn-side-title{flex:1 1 auto;min-width:0;font-size:14px;font-weight:600;letter-spacing:.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mn-side-actions{margin-left:auto;display:flex;align-items:center;gap:2px}
 .mn-side-search{flex:none;padding:0 10px 8px}
 .mn-search-wrap{position:relative;display:flex;align-items:center}
@@ -1144,6 +1153,9 @@ html[data-platform="darwin"] .mn-root{padding-top:var(--dsh-frame-top-clearance,
 .mn-row:hover{background:color-mix(in srgb,var(--dsw-alias-label-primary,#1d1d1f) 6%,transparent)}
 .mn-row[data-active="true"]{background:color-mix(in srgb,var(--dsw-alias-brand-primary,#2f6bff) 13%,transparent);color:var(--dsw-alias-label-primary,#1d1d1f)}
 .mn-row[data-active="true"]:before{content:"";position:absolute;left:0;top:6px;bottom:6px;width:2px;border-radius:2px;background:var(--dsw-alias-brand-primary,#2f6bff)}
+.mn-row[data-dragging="true"]{opacity:.5;cursor:grabbing}
+.mn-row[data-drop-target="true"]{background:color-mix(in srgb,var(--dsw-alias-brand-primary,#2f6bff) 10%,transparent);outline:1.5px dashed var(--dsw-alias-brand-primary,#2f6bff);outline-offset:-2px}
+.mn-row[data-drop-target="true"]:after{content:"↳";position:absolute;right:6px;bottom:1px;font-size:10px;color:var(--dsw-alias-brand-primary,#2f6bff);opacity:.85}
 .mn-row-icon{flex:none;width:16px;height:16px;display:flex;align-items:center;justify-content:center;color:var(--dsw-alias-label-secondary,#6b6b70)}
 .mn-row[data-active="true"] .mn-row-icon{color:var(--dsw-alias-brand-primary,#2f6bff)}
 .mn-row-name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px}
@@ -1601,10 +1613,18 @@ MN.TreeNode = function TreeNode(props) {
           style: { paddingLeft: 4 + depth * 14 },
           role: 'button',
           tabIndex: 0,
+          draggable: true,
           'aria-expanded': open ? 'true' : 'false',
+          'data-dragging': props.draggingPath === node.path ? 'true' : undefined,
+          'data-drop-target': props.dropTarget === node.path ? 'true' : undefined,
           title: node.path,
           onClick: () => props.onToggle(node.path),
           onContextMenu: (event) => props.onMenu(event, node),
+          onDragStart: (event) => props.onDragStart(event, node),
+          onDragEnd: props.onDragEnd,
+          onDragOver: (event) => props.onDragOver(event, node.path),
+          onDragLeave: (event) => props.onDragLeave(event, node.path),
+          onDrop: (event) => props.onDrop(event, node.path),
           onKeyDown: (event) => {
             if (event.key === 'Enter' || event.key === ' ') {
               event.preventDefault();
@@ -1688,6 +1708,13 @@ MN.TreeNode = function TreeNode(props) {
                     onNewNote: props.onNewNote,
                     onNewFolder: props.onNewFolder,
                     onFavorite: props.onFavorite,
+                    draggingPath: props.draggingPath,
+                    dropTarget: props.dropTarget,
+                    onDragStart: props.onDragStart,
+                    onDragEnd: props.onDragEnd,
+                    onDragOver: props.onDragOver,
+                    onDragLeave: props.onDragLeave,
+                    onDrop: props.onDrop,
                   }),
                 ),
           )
@@ -1702,11 +1729,15 @@ MN.TreeNode = function TreeNode(props) {
       className: 'mn-row',
       style: { paddingLeft: 4 + depth * 14 },
       'data-active': active ? 'true' : 'false',
+      'data-dragging': props.draggingPath === node.path ? 'true' : undefined,
       role: 'button',
       tabIndex: 0,
+      draggable: true,
       title: node.path,
       onClick: () => props.onOpen(node.path),
       onContextMenu: (event) => props.onMenu(event, node),
+      onDragStart: (event) => props.onDragStart(event, node),
+      onDragEnd: props.onDragEnd,
       onKeyDown: (event) => {
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
@@ -1758,6 +1789,8 @@ MN.TreeNode = function TreeNode(props) {
 /** 目录树主体：收藏区 + 全部笔记。 */
 MN.TreeView = function TreeView(props) {
   const t = MN.t;
+  const [draggingPath, setDraggingPath] = useState(null);
+  const [dropTarget, setDropTarget] = useState(null);
   const favoriteNotes = useMemo(() => {
     const out = [];
     for (const path of props.favorites) {
@@ -1766,6 +1799,64 @@ MN.TreeView = function TreeView(props) {
     }
     return out;
   }, [props.favorites, props.allTree]);
+
+  const canDropOn = (targetPath) => {
+    if (!draggingPath || !targetPath) return false;
+    if (targetPath === draggingPath) return false;
+    if (MN.dirnameOf(draggingPath) === targetPath) return false;
+    // 不能把文件夹拖进自身或它的子级目录。
+    if (MN.isSameOrDescendant(targetPath, draggingPath)) return false;
+    return true;
+  };
+
+  const handleDragStart = (event, node) => {
+    if (event.target && typeof event.target.closest === 'function' && event.target.closest('button')) {
+      event.preventDefault();
+      return;
+    }
+    if (!event.dataTransfer) return;
+    setDraggingPath(node.path);
+    setDropTarget(null);
+    event.dataTransfer.effectAllowed = 'move';
+    try {
+      event.dataTransfer.setData('text/plain', node.path);
+    } catch (error) {
+      /* 某些环境禁止 setData，不影响内部状态 */
+    }
+  };
+
+  const handleDragEnd = () => {
+    setDraggingPath(null);
+    setDropTarget(null);
+  };
+
+  const handleDragOver = (event, targetPath) => {
+    if (!canDropOn(targetPath)) {
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'none';
+      if (dropTarget === targetPath) setDropTarget(null);
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+    if (dropTarget !== targetPath) setDropTarget(targetPath);
+  };
+
+  const handleDragLeave = (event, targetPath) => {
+    const related = event.relatedTarget;
+    if (related && event.currentTarget && event.currentTarget.contains(related)) return;
+    if (dropTarget === targetPath) setDropTarget(null);
+  };
+
+  const handleDrop = (event, targetPath) => {
+    if (!canDropOn(targetPath)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const source = draggingPath || (event.dataTransfer ? event.dataTransfer.getData('text/plain') : '');
+    setDraggingPath(null);
+    setDropTarget(null);
+    if (source) props.onMove(source, targetPath);
+  };
 
   const rowProps = {
     expanded: props.expanded,
@@ -1778,6 +1869,13 @@ MN.TreeView = function TreeView(props) {
     onNewNote: props.onNewNote,
     onNewFolder: props.onNewFolder,
     onFavorite: props.onFavorite,
+    draggingPath,
+    dropTarget,
+    onDragStart: handleDragStart,
+    onDragEnd: handleDragEnd,
+    onDragOver: handleDragOver,
+    onDragLeave: handleDragLeave,
+    onDrop: handleDrop,
   };
 
   if (props.allTree.length === 0) {
@@ -3256,7 +3354,8 @@ function loadUiPrefs() {
     raw && typeof raw.splitRatio === 'number' && Number.isFinite(raw.splitRatio) && raw.splitRatio >= 0.2 && raw.splitRatio <= 0.8
       ? raw.splitRatio
       : 0.5;
-  return { view, expanded, syncScroll, splitRatio };
+  const sideCollapsed = Boolean(raw && raw.sideCollapsed === true);
+  return { view, expanded, syncScroll, splitRatio, sideCollapsed };
 }
 
 /** 把时间戳格式化为 HH:mm。 */
@@ -3473,6 +3572,7 @@ MN.AppPage = function AppPage(props) {
   const [view, setView] = useState(initialPrefs.view);
   const [syncScroll, setSyncScroll] = useState(initialPrefs.syncScroll);
   const [splitRatio, setSplitRatio] = useState(initialPrefs.splitRatio);
+  const [sideCollapsed, setSideCollapsed] = useState(initialPrefs.sideCollapsed);
   const [ghostCaret, setGhostCaret] = useState(null);
   const [query, setQuery] = useState('');
   const [searchResult, setSearchResult] = useState(null);
@@ -3936,12 +4036,13 @@ MN.AppPage = function AppPage(props) {
         view,
         syncScroll,
         splitRatio,
+        sideCollapsed,
         expanded: Array.from(expanded),
         lastOpened: lastOpenRef.current,
       });
     }, 200);
     return () => window.clearTimeout(timer);
-  }, [view, syncScroll, splitRatio, expanded]);
+  }, [view, syncScroll, splitRatio, sideCollapsed, expanded]);
 
   // Ctrl/Cmd + S 立即保存。
   useEffect(() => {
@@ -4116,6 +4217,60 @@ MN.AppPage = function AppPage(props) {
       });
     },
     [flushSave, openNote, refresh, showToast, t],
+  );
+
+  /** 在系统文件管理器中打开条目：文件会选中，文件夹会直接打开。 */
+  const revealEntry = useCallback(
+    async (path) => {
+      try {
+        await MN.api.post('entry/reveal', { path });
+        showToast(t('toast.revealed'), 'info');
+      } catch (error) {
+        showToast(error && error.message ? error.message : t('toast.revealFailed'), 'error');
+      }
+    },
+    [showToast, t],
+  );
+
+  /** 拖动树节点到目标文件夹：先保存当前笔记，再移动并同步活动笔记路径。 */
+  const moveEntry = useCallback(
+    async (sourcePath, targetDir) => {
+      try {
+        const saved = await flushSave();
+        if (saved === false) throw new Error(t('toast.saveFailed'));
+        const data = await MN.api.post('entry/move', { path: sourcePath, targetDir });
+        const moved = data.entry;
+        setExpanded((previous) => {
+          const next = new Set(previous);
+          if (targetDir) next.add(targetDir);
+          return next;
+        });
+        const current = noteRef.current;
+        if (current) {
+          let mapped = null;
+          if (current.path === moved.oldPath) mapped = moved.path;
+          else if (MN.isSameOrDescendant(current.path, moved.oldPath)) {
+            mapped = moved.path + current.path.slice(moved.oldPath.length);
+          }
+          if (mapped !== null) {
+            const next = { ...current, path: mapped, name: MN.basenameOf(mapped).replace(/\.(md|markdown)$/i, '') };
+            noteRef.current = next;
+            pendingRef.current = { path: mapped, content: next.content, dirty: false };
+            setNote(next);
+          }
+        }
+        await refresh();
+        showToast(t('toast.moved'), 'info');
+      } catch (error) {
+        showToast(error && error.message ? error.message : t('toast.moveFailed'), 'error');
+        try {
+          await refresh();
+        } catch (refreshError) {
+          /* 忽略刷新失败 */
+        }
+      }
+    },
+    [flushSave, refresh, showToast, t],
   );
 
   /* ----------------------------- 搜索 ----------------------------- */
@@ -4622,6 +4777,12 @@ MN.AppPage = function AppPage(props) {
         { id: 'new-note', icon: 'plus', label: t('tree.newNoteHere'), onClick: () => createNote(menuNode.path) },
         { id: 'new-folder', icon: 'plus-folder', label: t('tree.newFolderHere'), onClick: () => createFolder(menuNode.path) },
         { separator: true },
+        {
+          id: 'reveal',
+          icon: 'folder-open',
+          label: t('common.revealInFileManager'),
+          onClick: () => void revealEntry(menuNode.path),
+        },
         { id: 'rename', icon: 'rename', label: t('common.rename'), onClick: () => renameEntry(menuNode) },
         { id: 'delete', icon: 'trash', label: t('common.delete'), danger: true, onClick: () => deleteEntry(menuNode) },
       ];
@@ -4634,10 +4795,16 @@ MN.AppPage = function AppPage(props) {
         onClick: () => toggleFavorite(menuNode.path, !favorite),
       },
       { separator: true },
+      {
+        id: 'reveal',
+        icon: 'folder-open',
+        label: t('common.revealInFileManager'),
+        onClick: () => void revealEntry(menuNode.path),
+      },
       { id: 'rename', icon: 'rename', label: t('common.rename'), onClick: () => renameEntry(menuNode) },
       { id: 'delete', icon: 'trash', label: t('common.delete'), danger: true, onClick: () => deleteEntry(menuNode) },
     ];
-  }, [createFolder, createNote, deleteEntry, favoriteSet, menuNode, renameEntry, t, toggleFavorite]);
+  }, [createFolder, createNote, deleteEntry, favoriteSet, menuNode, renameEntry, revealEntry, t, toggleFavorite]);
 
   /* ----------------------------- 渲染 ----------------------------- */
 
@@ -4766,13 +4933,30 @@ MN.AppPage = function AppPage(props) {
 
   return h(
     'div',
-    { className: 'mn-root', 'data-view': columns },
-    h(
+    {
+      className: 'mn-root',
+      'data-view': columns,
+      'data-side-collapsed': sideCollapsed ? 'true' : 'false',
+    },
+    sideCollapsed
+      ? null
+      : h(
       'aside',
       { className: 'mn-side' },
       h(
         'div',
         { className: 'mn-side-head' },
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'mn-iconbtn mn-side-collapse',
+            title: t('app.collapseSide'),
+            'aria-label': t('app.collapseSide'),
+            onClick: () => setSideCollapsed(true),
+          },
+          h(MN.Icon, { name: 'panel-left', size: 15 }),
+        ),
         h('span', { className: 'mn-side-title' }, t('app.title')),
         h(
           'div',
@@ -4891,6 +5075,7 @@ MN.AppPage = function AppPage(props) {
             onNewNote: createNote,
             onNewFolder: createFolder,
             onFavorite: (path, favorite) => void toggleFavorite(path, favorite),
+            onMove: (sourcePath, targetDir) => void moveEntry(sourcePath, targetDir),
           }),
       h(
         'div',
@@ -4920,6 +5105,19 @@ MN.AppPage = function AppPage(props) {
         h('span', { className: 'mn-side-count' }, String(state.stats ? state.stats.notes : 0)),
       ),
     ),
+    sideCollapsed
+      ? h(
+          'button',
+          {
+            type: 'button',
+            className: 'mn-side-expand',
+            title: t('app.expandSide'),
+            'aria-label': t('app.expandSide'),
+            onClick: () => setSideCollapsed(false),
+          },
+          h(MN.Icon, { name: 'panel-left', size: 16 }),
+        )
+      : null,
     h(
       'main',
       { className: 'mn-main' },
@@ -5194,6 +5392,8 @@ function currentSourceSelection(element) {
 MN.DICTIONARIES = {
   zh: {
     'app.title': 'Markdown 笔记',
+    'app.collapseSide': '收起文件栏',
+    'app.expandSide': '展开文件栏',
     'app.newNote': '新建笔记',
     'app.newFolder': '新建文件夹',
     'app.refresh': '刷新目录',
@@ -5214,6 +5414,7 @@ MN.DICTIONARIES = {
     'common.insert': '插入',
     'common.create': '创建',
     'common.more': '更多操作',
+    'common.revealInFileManager': '从文件管理器中打开',
     'tree.favorites': '收藏',
     'tree.allNotes': '全部笔记',
     'tree.newNoteHere': '在此新建笔记',
@@ -5306,6 +5507,10 @@ MN.DICTIONARIES = {
     'toast.searchFailed': '搜索失败',
     'toast.storageSaved': '存储目录已更新',
     'toast.refreshed': '目录已刷新',
+    'toast.revealed': '已在文件管理器中打开',
+    'toast.revealFailed': '打开文件管理器失败',
+    'toast.moved': '已移动到目标文件夹',
+    'toast.moveFailed': '移动失败',
     'toast.refreshFailed': '刷新失败',
     'time.justNow': '刚刚',
     'time.minutes': ' 分钟前',
@@ -5317,6 +5522,8 @@ MN.DICTIONARIES = {
   },
   en: {
     'app.title': 'Markdown Notes',
+    'app.collapseSide': 'Collapse file bar',
+    'app.expandSide': 'Expand file bar',
     'app.newNote': 'New note',
     'app.newFolder': 'New folder',
     'app.refresh': 'Refresh tree',
@@ -5337,6 +5544,7 @@ MN.DICTIONARIES = {
     'common.insert': 'Insert',
     'common.create': 'Create',
     'common.more': 'More actions',
+    'common.revealInFileManager': 'Open in file manager',
     'tree.favorites': 'Favorites',
     'tree.allNotes': 'All notes',
     'tree.newNoteHere': 'New note here',
@@ -5429,6 +5637,10 @@ MN.DICTIONARIES = {
     'toast.searchFailed': 'Search failed',
     'toast.storageSaved': 'Storage folder updated',
     'toast.refreshed': 'Tree refreshed',
+    'toast.revealed': 'Opened in the file manager',
+    'toast.revealFailed': 'Could not open the file manager',
+    'toast.moved': 'Moved to the target folder',
+    'toast.moveFailed': 'Move failed',
     'toast.refreshFailed': 'Refresh failed',
     'time.justNow': 'just now',
     'time.minutes': ' min ago',

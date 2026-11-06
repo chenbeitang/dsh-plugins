@@ -8,6 +8,7 @@
  * @module @local/markdown-notes/host/routes
  */
 import { NotesError } from './storage.js';
+import { openInFileManager } from './reveal.js';
 
 /** HTTP 前缀；与 Client 里写死的一致。 */
 export const ROUTE_PREFIX = '/markdown-notes';
@@ -24,6 +25,8 @@ export const API_ROUTES = Object.freeze([
   'POST /api/folder/create',
   'POST /api/entry/rename',
   'POST /api/entry/delete',
+  'POST /api/entry/move',
+  'POST /api/entry/reveal',
   'POST /api/favorite',
   'POST /api/meta',
   'POST /api/image',
@@ -156,6 +159,30 @@ export function createRouter(deps) {
         if (!parsed.ok) return failure(new NotesError('invalid-body', parsed.error));
         const deleted = await deps.store.deleteEntry(parsed.value.path);
         return success({ entry: deleted });
+      }
+
+      if (rest === '/api/entry/move') {
+        if (method !== 'POST') return failure(new NotesError('method', '不支持的请求方法'));
+        const parsed = parseJsonBody(request.body);
+        if (!parsed.ok) return failure(new NotesError('invalid-body', parsed.error));
+        const moved = await deps.store.moveEntry(parsed.value.path, parsed.value.targetDir);
+        return success({ entry: moved });
+      }
+
+      if (rest === '/api/entry/reveal') {
+        if (method !== 'POST') return failure(new NotesError('method', '不支持的请求方法'));
+        const parsed = parseJsonBody(request.body);
+        if (!parsed.ok) return failure(new NotesError('invalid-body', parsed.error));
+        const location = await deps.store.entryLocation(parsed.value.path);
+        const opened = openInFileManager(location.absPath, location.isDirectory, deps.logger);
+        if (!opened.ok) {
+          return failure(new NotesError('reveal-failed', opened.error || '无法打开文件管理器'));
+        }
+        return success({
+          path: location.path,
+          directory: location.isDirectory,
+          revealed: true,
+        });
       }
 
       if (rest === '/api/favorite') {

@@ -14,7 +14,8 @@ function loadUiPrefs() {
     raw && typeof raw.splitRatio === 'number' && Number.isFinite(raw.splitRatio) && raw.splitRatio >= 0.2 && raw.splitRatio <= 0.8
       ? raw.splitRatio
       : 0.5;
-  return { view, expanded, syncScroll, splitRatio };
+  const sideCollapsed = Boolean(raw && raw.sideCollapsed === true);
+  return { view, expanded, syncScroll, splitRatio, sideCollapsed };
 }
 
 /** 把时间戳格式化为 HH:mm。 */
@@ -231,6 +232,7 @@ MN.AppPage = function AppPage(props) {
   const [view, setView] = useState(initialPrefs.view);
   const [syncScroll, setSyncScroll] = useState(initialPrefs.syncScroll);
   const [splitRatio, setSplitRatio] = useState(initialPrefs.splitRatio);
+  const [sideCollapsed, setSideCollapsed] = useState(initialPrefs.sideCollapsed);
   const [ghostCaret, setGhostCaret] = useState(null);
   const [query, setQuery] = useState('');
   const [searchResult, setSearchResult] = useState(null);
@@ -694,12 +696,13 @@ MN.AppPage = function AppPage(props) {
         view,
         syncScroll,
         splitRatio,
+        sideCollapsed,
         expanded: Array.from(expanded),
         lastOpened: lastOpenRef.current,
       });
     }, 200);
     return () => window.clearTimeout(timer);
-  }, [view, syncScroll, splitRatio, expanded]);
+  }, [view, syncScroll, splitRatio, sideCollapsed, expanded]);
 
   // Ctrl/Cmd + S 立即保存。
   useEffect(() => {
@@ -874,6 +877,60 @@ MN.AppPage = function AppPage(props) {
       });
     },
     [flushSave, openNote, refresh, showToast, t],
+  );
+
+  /** 在系统文件管理器中打开条目：文件会选中，文件夹会直接打开。 */
+  const revealEntry = useCallback(
+    async (path) => {
+      try {
+        await MN.api.post('entry/reveal', { path });
+        showToast(t('toast.revealed'), 'info');
+      } catch (error) {
+        showToast(error && error.message ? error.message : t('toast.revealFailed'), 'error');
+      }
+    },
+    [showToast, t],
+  );
+
+  /** 拖动树节点到目标文件夹：先保存当前笔记，再移动并同步活动笔记路径。 */
+  const moveEntry = useCallback(
+    async (sourcePath, targetDir) => {
+      try {
+        const saved = await flushSave();
+        if (saved === false) throw new Error(t('toast.saveFailed'));
+        const data = await MN.api.post('entry/move', { path: sourcePath, targetDir });
+        const moved = data.entry;
+        setExpanded((previous) => {
+          const next = new Set(previous);
+          if (targetDir) next.add(targetDir);
+          return next;
+        });
+        const current = noteRef.current;
+        if (current) {
+          let mapped = null;
+          if (current.path === moved.oldPath) mapped = moved.path;
+          else if (MN.isSameOrDescendant(current.path, moved.oldPath)) {
+            mapped = moved.path + current.path.slice(moved.oldPath.length);
+          }
+          if (mapped !== null) {
+            const next = { ...current, path: mapped, name: MN.basenameOf(mapped).replace(/\.(md|markdown)$/i, '') };
+            noteRef.current = next;
+            pendingRef.current = { path: mapped, content: next.content, dirty: false };
+            setNote(next);
+          }
+        }
+        await refresh();
+        showToast(t('toast.moved'), 'info');
+      } catch (error) {
+        showToast(error && error.message ? error.message : t('toast.moveFailed'), 'error');
+        try {
+          await refresh();
+        } catch (refreshError) {
+          /* 忽略刷新失败 */
+        }
+      }
+    },
+    [flushSave, refresh, showToast, t],
   );
 
   /* ----------------------------- 搜索 ----------------------------- */
@@ -1380,6 +1437,12 @@ MN.AppPage = function AppPage(props) {
         { id: 'new-note', icon: 'plus', label: t('tree.newNoteHere'), onClick: () => createNote(menuNode.path) },
         { id: 'new-folder', icon: 'plus-folder', label: t('tree.newFolderHere'), onClick: () => createFolder(menuNode.path) },
         { separator: true },
+        {
+          id: 'reveal',
+          icon: 'folder-open',
+          label: t('common.revealInFileManager'),
+          onClick: () => void revealEntry(menuNode.path),
+        },
         { id: 'rename', icon: 'rename', label: t('common.rename'), onClick: () => renameEntry(menuNode) },
         { id: 'delete', icon: 'trash', label: t('common.delete'), danger: true, onClick: () => deleteEntry(menuNode) },
       ];
@@ -1392,10 +1455,16 @@ MN.AppPage = function AppPage(props) {
         onClick: () => toggleFavorite(menuNode.path, !favorite),
       },
       { separator: true },
+      {
+        id: 'reveal',
+        icon: 'folder-open',
+        label: t('common.revealInFileManager'),
+        onClick: () => void revealEntry(menuNode.path),
+      },
       { id: 'rename', icon: 'rename', label: t('common.rename'), onClick: () => renameEntry(menuNode) },
       { id: 'delete', icon: 'trash', label: t('common.delete'), danger: true, onClick: () => deleteEntry(menuNode) },
     ];
-  }, [createFolder, createNote, deleteEntry, favoriteSet, menuNode, renameEntry, t, toggleFavorite]);
+  }, [createFolder, createNote, deleteEntry, favoriteSet, menuNode, renameEntry, revealEntry, t, toggleFavorite]);
 
   /* ----------------------------- 渲染 ----------------------------- */
 
@@ -1524,13 +1593,30 @@ MN.AppPage = function AppPage(props) {
 
   return h(
     'div',
-    { className: 'mn-root', 'data-view': columns },
-    h(
+    {
+      className: 'mn-root',
+      'data-view': columns,
+      'data-side-collapsed': sideCollapsed ? 'true' : 'false',
+    },
+    sideCollapsed
+      ? null
+      : h(
       'aside',
       { className: 'mn-side' },
       h(
         'div',
         { className: 'mn-side-head' },
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'mn-iconbtn mn-side-collapse',
+            title: t('app.collapseSide'),
+            'aria-label': t('app.collapseSide'),
+            onClick: () => setSideCollapsed(true),
+          },
+          h(MN.Icon, { name: 'panel-left', size: 15 }),
+        ),
         h('span', { className: 'mn-side-title' }, t('app.title')),
         h(
           'div',
@@ -1649,6 +1735,7 @@ MN.AppPage = function AppPage(props) {
             onNewNote: createNote,
             onNewFolder: createFolder,
             onFavorite: (path, favorite) => void toggleFavorite(path, favorite),
+            onMove: (sourcePath, targetDir) => void moveEntry(sourcePath, targetDir),
           }),
       h(
         'div',
@@ -1678,6 +1765,19 @@ MN.AppPage = function AppPage(props) {
         h('span', { className: 'mn-side-count' }, String(state.stats ? state.stats.notes : 0)),
       ),
     ),
+    sideCollapsed
+      ? h(
+          'button',
+          {
+            type: 'button',
+            className: 'mn-side-expand',
+            title: t('app.expandSide'),
+            'aria-label': t('app.expandSide'),
+            onClick: () => setSideCollapsed(false),
+          },
+          h(MN.Icon, { name: 'panel-left', size: 16 }),
+        )
+      : null,
     h(
       'main',
       { className: 'mn-main' },

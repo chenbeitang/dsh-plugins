@@ -1906,6 +1906,7 @@ MN.AppPage = function AppPage(props) {
                       { className: 'mn-source' },
                       h(MN.SourceEditor, {
                         textareaRef: sourceRef,
+                        mirrorRef: sourceMirrorRef,
                         value: note.content,
                         placeholder: t('editor.sourcePlaceholder'),
                         onChange: handleContentChange,

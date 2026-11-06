@@ -147,6 +147,10 @@ MN.Icon = function Icon(props) {
     case 'code':
       children.push(h('path', { key: 'a', d: 'm8 7.5-4.3 4.5L8 16.5M16 7.5l4.3 4.5-4.3 4.5' }));
       break;
+    case 'table':
+      children.push(h('rect', { key: 'a', x: 3.5, y: 4.5, width: 17, height: 15, rx: 2 }));
+      children.push(h('path', { key: 'b', d: 'M3.5 9.5h17M3.5 14.5h17M9.2 4.5v15M14.8 4.5v15' }));
+      break;
     case 'task':
       children.push(h('rect', { key: 'a', x: 4, y: 4, width: 16, height: 16, rx: 3 }));
       children.push(h('path', { key: 'b', d: 'm8.3 12.2 2.4 2.5 5-5.3' }));

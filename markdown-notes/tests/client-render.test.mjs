@@ -464,7 +464,7 @@ check('ContextMenu renders items', () => {
 check('SourceEditor and RichEditor render', () => {
   const env = makeEnv();
   env.reset([]);
-  const sourceEditor = deepRender(
+  const sourceTree = deepRender(
     env,
     env.MN.SourceEditor({
       textareaRef: { current: null },
@@ -473,7 +473,38 @@ check('SourceEditor and RichEditor render', () => {
       onFocus() {},
     }),
   );
+  const sourceEditor = Array.isArray(sourceTree) ? sourceTree.find((node) => node && node.type === 'textarea') : sourceTree;
   assert.equal(sourceEditor.type, 'textarea');
+  env.reset([{ left: 10, top: 20, index: 0 }]);
+  const sourceMenuTree = deepRender(
+    env,
+    env.MN.SourceEditor({
+      textareaRef: { current: null },
+      value: '',
+      onChange() {},
+      onFocus() {},
+    }),
+  );
+  assert.ok(hasClass(sourceMenuTree, 'mn-slash-menu'));
+  const sourceMenuText = [];
+  collectText(sourceMenuTree, sourceMenuText);
+  assert.ok(sourceMenuText.join(' ').includes('slash.code'));
+  const sourceMenuJoined = sourceMenuText.join(' ');
+  const expectedOrder = [
+    'slash.code',
+    'slash.quote',
+    'slash.divider',
+    'slash.table',
+    'slash.task',
+    'slash.ordered',
+    'slash.bullet',
+    'slash.heading3',
+    'slash.heading2',
+    'slash.heading1',
+    'slash.paragraph',
+  ];
+  const positions = expectedOrder.map((key) => sourceMenuJoined.indexOf(key));
+  assert.ok(positions.every((position, index) => position >= 0 && (index === 0 || position > positions[index - 1])));
   env.reset([]);
   const richRoot = deepRender(
     env,
@@ -490,6 +521,89 @@ check('SourceEditor and RichEditor render', () => {
   const seedHtml = String(rich.props.dangerouslySetInnerHTML.__html);
   assert.match(seedHtml, /<h1[ >]/);
   assert.match(seedHtml, /data-line="1"/);
+});
+
+check('slash block insertion targets the empty block', () => {
+  const env = makeEnv();
+  env.reset([]);
+  const empty = env.MN.slashInsertMarkdown('', null, '```\n\n```');
+  assert.equal(empty.markdown, '```\n\n```');
+  assert.equal(empty.line, 1);
+
+  const byLine = env.MN.slashInsertMarkdown('a\n\nb', { getAttribute: (name) => (name === 'data-line' ? '2' : null) }, '> ');
+  assert.equal(byLine.markdown, 'a\n\n> \n\nb');
+  assert.equal(byLine.line, 3);
+
+  const between = env.MN.slashInsertMarkdown(
+    'a\n\nb',
+    {
+      getAttribute: () => null,
+      previousElementSibling: { getAttribute: (name) => (name === 'data-line-end' ? '1' : null) },
+      nextElementSibling: { getAttribute: (name) => (name === 'data-line' ? '3' : null) },
+    },
+    '---',
+  );
+  assert.equal(between.markdown, 'a\n\n---\n\nb');
+  assert.equal(between.line, 3);
+});
+
+check('slash source insertion replaces the empty line', () => {
+  const env = makeEnv();
+  env.reset([]);
+  assert.deepEqual(env.MN.slashInsertSourceMarkdown('', 0, '# '), { markdown: '# ', line: 1 });
+  assert.deepEqual(env.MN.slashInsertSourceMarkdown('a\n\nb', 1, '---'), { markdown: 'a\n\n---\n\nb', line: 3 });
+  assert.deepEqual(env.MN.slashInsertSourceMarkdown('a\n', 1, '```\n\n```'), {
+    markdown: 'a\n\n```\n\n```',
+    line: 3,
+  });
+  assert.deepEqual(env.MN.slashInsertSourceMarkdown('/\n', 0, '# '), { markdown: '# ', line: 1 });
+  assert.deepEqual(env.MN.slashInsertSourceMarkdown('a\n、\nb', 1, '---'), { markdown: 'a\n\n---\n\nb', line: 3 });
+});
+
+check('slash source trigger only matches an optional whole-line character', () => {
+  const env = makeEnv();
+  env.reset([]);
+  assert.equal(env.MN.sourceSlashTrigger('/'), '/');
+  assert.equal(env.MN.sourceSlashTrigger('、'), '、');
+  assert.equal(env.MN.sourceSlashTrigger('  /'), '/');
+  assert.equal(env.MN.sourceSlashTrigger('/ '), null);
+  assert.equal(env.MN.sourceSlashTrigger('/a'), null);
+});
+
+check('code fence language can be changed without touching the body', () => {
+  const env = makeEnv();
+  env.reset([]);
+  const changed = env.MN.setCodeFenceLanguage('```js\nconst x = 1;\n```', 1, 'python');
+  assert.equal(changed.changed, true);
+  assert.equal(changed.markdown, '```python\nconst x = 1;\n```');
+
+  const plain = env.MN.setCodeFenceLanguage('```java\nclass A {}\n```', 1, 'text');
+  assert.equal(plain.markdown, '```\nclass A {}\n```');
+
+  const untouched = env.MN.setCodeFenceLanguage('plain text', 1, 'java');
+  assert.equal(untouched.changed, false);
+  assert.equal(untouched.markdown, 'plain text');
+});
+
+check('RichEditor renders the slash block menu', () => {
+  const env = makeEnv();
+  env.reset(['<p>hi</p>', null, { left: 20, top: 30, index: 0 }]);
+  const root = deepRender(
+    env,
+    env.MN.RichEditor({
+      markdown: '',
+      onChange() {},
+      onFocus() {},
+      uploadImage: async () => null,
+      apiRef: { current: null },
+    }),
+  );
+  assert.ok(hasClass(root, 'mn-slash-menu'));
+  const text = [];
+  collectText(root, text);
+  assert.ok(text.join(' ').includes('slash.code'));
+  assert.ok(text.join(' ').includes('slash.table'));
+  assert.ok(text.join(' ').includes('slash.divider'));
 });
 
 check('htmlToMarkdown keeps image width', () => {
@@ -827,6 +941,46 @@ check('highlighted code spans keep character mapping', () => {
   const position = env.MN.previewSelectionToPosition(preview, value);
   assert.equal(position.line, 2);
   assert.equal(position.column, 5);
+  currentSelection = { rangeCount: 0, getRangeAt: () => null };
+});
+
+check('multiline code selection maps to the right source line', () => {
+  const env = makeEnv();
+  env.reset([]);
+  const value = '```\nfirst\nsecond\n```';
+  const text = { nodeType: 3, nodeValue: 'first\nsecond', parentElement: null };
+  const code = {
+    nodeType: 1,
+    tagName: 'CODE',
+    childNodes: [text],
+    classList: { contains: () => false },
+  };
+  const block = {
+    nodeType: 1,
+    tagName: 'PRE',
+    childNodes: [code],
+    classList: { contains: () => false },
+    getAttribute(name) {
+      if (name === 'data-line') return '1';
+      if (name === 'data-line-end') return '4';
+      return null;
+    },
+    closest(selector) {
+      return selector === '[data-line]' ? block : null;
+    },
+  };
+  text.parentElement = code;
+  code.parentElement = block;
+  code.closest = (selector) => (selector === '[data-line]' ? block : null);
+  const preview = { querySelectorAll: () => [block], contains: () => true };
+
+  currentSelection = {
+    rangeCount: 1,
+    getRangeAt: () => ({ startContainer: text, startOffset: 6 }),
+  };
+  const position = env.MN.previewSelectionToPosition(preview, value);
+  assert.equal(position.line, 3);
+  assert.equal(position.column, 0);
   currentSelection = { rangeCount: 0, getRangeAt: () => null };
 });
 

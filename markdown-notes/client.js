@@ -20,7 +20,7 @@ window.__ModuleLoader__.load({
     /** 本包 Client 侧唯一命名空间：各 part 只往这里挂方法/组件。 */
     const MN = {
       id: 'markdown-notes',
-      version: '1.7.0',
+      version: '1.9.1',
       React,
       h,
       useState,
@@ -338,6 +338,37 @@ MN.md = (function () {
     return escapeHtml(text).replace(/'/g, '&#39;');
   }
 
+  /** 代码块语言下拉选项；未指定语言时显示 text。 */
+  const CODE_LANGUAGE_OPTIONS = [
+    'text', 'java', 'javascript', 'typescript', 'python', 'c', 'cpp', 'csharp', 'go', 'rust',
+    'kotlin', 'swift', 'php', 'ruby', 'sql', 'xml', 'html', 'css', 'json', 'yaml', 'shell',
+    'powershell', 'dockerfile', 'diff', 'markdown',
+  ];
+
+  function codeLanguageSelect(language, startLine) {
+    const current = language === '' ? 'text' : language;
+    const values = CODE_LANGUAGE_OPTIONS.slice();
+    if (!values.includes(current)) values.unshift(current);
+    const options = values
+      .map(
+        (value) =>
+          '<option value="' + escapeAttr(value) + '"' + (value === current ? ' selected' : '') + '>' +
+          escapeHtml(value) +
+          '</option>',
+      )
+      .join('');
+    return (
+      '<div class="mn-code-head" contenteditable="false">' +
+      '<span class="mn-code-head-icon" aria-hidden="true">&lt;/&gt;</span>' +
+      '<span class="mn-code-lang-wrap">' +
+      '<select class="mn-code-lang" contenteditable="false" data-code-line="' + (Number(startLine) || 1) + '" title="代码类型" aria-label="代码类型">' +
+      options +
+      '</select>' +
+      '</span>' +
+      '</div>'
+    );
+  }
+
   function pushSlot(slots, html) {
     slots.push(html);
     return SLOT_OPEN + (slots.length - 1) + SLOT_CLOSE;
@@ -641,7 +672,8 @@ MN.md = (function () {
         const className = language === '' ? '' : ' class="language-' + escapeAttr(language) + '"';
         const code = buffer.join('\n');
         const highlighted = language === '' ? escapeHtml(code) : highlightCode(code, language);
-        out.push('<pre' + attrs(startLine, index) + '><code' + className + '>' + highlighted + '</code></pre>');
+        const pre = '<pre' + attrs(startLine, index) + '><code' + className + '>' + highlighted + '</code></pre>';
+        out.push('<div class="mn-code-block">' + codeLanguageSelect(language, startLine) + pre + '</div>');
         continue;
       }
 
@@ -875,6 +907,11 @@ MN.md = (function () {
 
   function blockNodeToMarkdown(node, context) {
     const tag = node.tagName.toLowerCase();
+    if (tag === 'div' && node.classList && node.classList.contains('mn-code-head')) return '';
+    if (tag === 'div' && node.classList && node.classList.contains('mn-code-block')) {
+      const pre = typeof node.querySelector === 'function' ? node.querySelector('pre') : null;
+      return pre ? blockNodeToMarkdown(pre, context) : '';
+    }
     if (/^h[1-6]$/.test(tag)) {
       return '#'.repeat(Number(tag[1])) + ' ' + inlineNodes(node.childNodes, context).trim();
     }
@@ -887,7 +924,7 @@ MN.md = (function () {
       const codeElement = node.querySelector('code');
       const text = (codeElement || node).textContent.replace(/\n$/, '');
       const className = codeElement ? String(codeElement.getAttribute('class') || '') : '';
-      const language = /language-([\w+-]+)/.exec(className);
+      const language = /language-([\w+#.-]+)/.exec(className);
       return '```' + (language ? language[1] : '') + '\n' + text + '\n```';
     }
     if (tag === 'hr') return '---';
@@ -1606,6 +1643,10 @@ MN.Icon = function Icon(props) {
     case 'code':
       children.push(h('path', { key: 'a', d: 'm8 7.5-4.3 4.5L8 16.5M16 7.5l4.3 4.5-4.3 4.5' }));
       break;
+    case 'table':
+      children.push(h('rect', { key: 'a', x: 3.5, y: 4.5, width: 17, height: 15, rx: 2 }));
+      children.push(h('path', { key: 'b', d: 'M3.5 9.5h17M3.5 14.5h17M9.2 4.5v15M14.8 4.5v15' }));
+      break;
     case 'task':
       children.push(h('rect', { key: 'a', x: 4, y: 4, width: 16, height: 16, rx: 3 }));
       children.push(h('path', { key: 'b', d: 'm8.3 12.2 2.4 2.5 5-5.3' }));
@@ -1735,6 +1776,17 @@ html[data-platform="darwin"] .mn-root{padding-top:var(--dsh-frame-top-clearance,
 .mn-source-input::-webkit-scrollbar,.mn-rich::-webkit-scrollbar{width:10px;height:10px}
 .mn-source-input::-webkit-scrollbar-thumb,.mn-rich::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--dsw-alias-label-secondary,#6b6b70) 26%,transparent);border:2px solid transparent;background-clip:content-box;border-radius:6px}
 .mn-editor-wrap{flex:1 1 auto;min-height:0;min-width:0;display:flex;position:relative}
+.mn-slash-menu{position:fixed;z-index:60;width:286px;max-height:360px;display:flex;flex-direction:column;padding:6px;background:var(--dsw-alias-bg-overlay,#fff);border:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.16));border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.18),0 2px 8px rgba(0,0,0,.08);overflow:hidden}
+.mn-slash-head{flex:none;padding:5px 8px 6px;font-size:11px;font-weight:600;letter-spacing:.3px;color:var(--dsw-alias-label-secondary,#6b6b70)}
+.mn-slash-list{flex:1 1 auto;min-height:0;overflow:auto;padding:1px 0}
+.mn-slash-item{display:flex;align-items:center;gap:9px;width:100%;border:0;background:transparent;border-radius:7px;padding:5px 7px;text-align:left;color:var(--dsw-alias-label-primary,#1d1d1f);font:inherit;cursor:pointer;outline:none}
+.mn-slash-item:hover,.mn-slash-item[data-active="true"]{background:color-mix(in srgb,var(--dsw-alias-brand-primary,#2f6bff) 11%,transparent)}
+.mn-slash-icon{flex:none;width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;border-radius:6px;background:var(--dsw-alias-bg-layer-2,rgba(0,0,0,.05));color:var(--dsw-alias-label-secondary,#6b6b70)}
+.mn-slash-item[data-active="true"] .mn-slash-icon{color:var(--dsw-alias-brand-primary,#2f6bff);background:color-mix(in srgb,var(--dsw-alias-brand-primary,#2f6bff) 13%,transparent)}
+.mn-slash-copy{display:flex;flex-direction:column;gap:1px;min-width:0}
+.mn-slash-label{font-size:12.5px;font-weight:600;line-height:1.35}
+.mn-slash-desc{font-size:10.5px;line-height:1.3;color:var(--dsw-alias-label-secondary,#8a8a90);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mn-slash-foot{flex:none;padding:6px 8px 2px;margin-top:2px;border-top:1px solid var(--dsw-alias-border-l1,rgba(0,0,0,.07));font-size:10px;line-height:1.4;color:var(--dsw-alias-label-secondary,#8a8a90)}
 .mn-rich{--mn-block-border:color-mix(in srgb,var(--dsw-alias-label-secondary,#6b6b70) 46%,transparent);flex:1 1 auto;min-height:0;overflow:auto;padding:18px 26px 44px;outline:none;font-size:14px;line-height:1.78;word-break:break-word;color:var(--dsw-alias-label-primary,#1d1d1f)}
 .mn-rich:empty:before{content:attr(data-placeholder);color:var(--dsw-alias-label-secondary,#8a8a90);pointer-events:none}
 .mn-rich > *:first-child{margin-top:0}
@@ -1754,6 +1806,17 @@ html[data-platform="darwin"] .mn-root{padding-top:var(--dsh-frame-top-clearance,
 .mn-rich blockquote{margin:.8em 0;padding:.15em 0 .15em 1em;border-left:3px solid color-mix(in srgb,var(--dsw-alias-brand-primary,#2f6bff) 55%,transparent);color:var(--dsw-alias-label-secondary,#55555a);background:color-mix(in srgb,var(--dsw-alias-brand-primary,#2f6bff) 4%,transparent);border-radius:0 6px 6px 0}
 .mn-rich code{font-family:"Cascadia Mono",Consolas,"SF Mono","Courier New",monospace;font-size:.88em;background:var(--dsw-alias-bg-layer-2,rgba(0,0,0,.06));padding:.12em .38em;border-radius:4px}
 .mn-rich pre{margin:.8em 0;padding:12px 14px;background:var(--dsw-alias-bg-layer-1,#f6f6f7);border:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.22));border-color:var(--mn-block-border);border-radius:8px;overflow:auto;line-height:1.6}
+.mn-rich .mn-code-block{margin:.8em 0;border:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.22));border-color:var(--mn-block-border);border-radius:8px;overflow:hidden;background:var(--dsw-alias-bg-layer-1,#f6f6f7)}
+.mn-rich .mn-code-head{display:flex;align-items:center;gap:7px;padding:5px 9px;background:color-mix(in srgb,var(--dsw-alias-bg-layer-2,rgba(0,0,0,.04)) 82%,transparent);border-bottom:1px solid var(--mn-block-border);user-select:none}
+.mn-rich .mn-code-head-icon{font-family:"Cascadia Mono",Consolas,monospace;font-size:10px;letter-spacing:.2px;color:var(--dsw-alias-label-secondary,#8a8a90);opacity:.62;user-select:none}
+.mn-rich .mn-code-lang-wrap{position:relative;display:inline-flex;align-items:center;max-width:164px}
+.mn-rich .mn-code-lang-wrap:after{content:"";position:absolute;right:7px;top:50%;width:5px;height:5px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;color:var(--dsw-alias-label-secondary,#8a8a90);transform:translateY(-72%) rotate(45deg);pointer-events:none;transition:transform .15s ease,color .15s ease}
+.mn-rich .mn-code-lang-wrap:focus-within:after{transform:translateY(-28%) rotate(225deg);color:var(--dsw-alias-brand-primary,#2f6bff)}
+.mn-rich .mn-code-lang{appearance:none;-webkit-appearance:none;-moz-appearance:none;min-width:62px;max-width:164px;border:1px solid transparent;border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary,#6b6b70);font-family:"Cascadia Mono",Consolas,"SF Mono",monospace;font-size:10.5px;line-height:1.4;padding:3px 23px 3px 8px;cursor:pointer;outline:none;text-overflow:ellipsis;transition:background .12s ease,color .12s ease,border-color .12s ease,box-shadow .12s ease}
+.mn-rich .mn-code-lang:hover{background:var(--dsw-alias-bg-base,#fff);border-color:var(--dsw-alias-border-l1,rgba(0,0,0,.12));color:var(--dsw-alias-label-primary,#1d1d1f)}
+.mn-rich .mn-code-lang:focus-visible{border-color:var(--dsw-alias-brand-primary,#2f6bff);background:var(--dsw-alias-bg-base,#fff);color:var(--dsw-alias-label-primary,#1d1d1f);box-shadow:0 0 0 2px color-mix(in srgb,var(--dsw-alias-brand-primary,#2f6bff) 15%,transparent)}
+.mn-rich .mn-code-lang option{color:var(--dsw-alias-label-primary,#1d1d1f);background:var(--dsw-alias-bg-overlay,#fff)}
+.mn-rich .mn-code-block pre{margin:0;border:0;border-radius:0;background:transparent}
 .mn-rich pre code{background:transparent;padding:0;font-size:12.5px;white-space:pre}
 .mn-rich .tok-comment{color:var(--dsw-alias-label-secondary,#6b6b70);font-style:italic;opacity:.88}
 .mn-rich .tok-keyword{color:var(--dsw-alias-brand-primary,#2f6bff);font-weight:600}
@@ -3012,7 +3075,7 @@ function tableSelectionToPosition(wrapper, range, value) {
   if (!sourceCell) return null;
   let renderedIndex = -1;
   for (const part of renderedCell.parts) {
-    if (part.node === container) {
+    if (part.node === container && range.startOffset >= part.start && range.startOffset <= part.end) {
       const relative = range.startOffset - part.start;
       renderedIndex = part.partStart + Math.max(0, Math.min(part.end - part.start, relative));
       break;
@@ -3198,7 +3261,7 @@ MN.previewSelectionToPosition = function previewSelectionToPosition(preview, val
   for (let index = 0; index < segments.length; index += 1) {
     const segment = segments[index];
     for (const part of segment.parts) {
-      if (part.node === container) {
+      if (part.node === container && range.startOffset >= part.start && range.startOffset <= part.end) {
         const relative = range.startOffset - part.start;
         renderedIndex = part.partStart + Math.max(0, Math.min(part.end - part.start, relative));
         segmentIndex = index;
@@ -3305,18 +3368,222 @@ MN.caretVisibleIn = function caretVisibleIn(rect, element) {
 };
 
 /** Markdown 原文编辑器。 */
+/** 在原文指定空行处插入 Markdown 块，返回新源码与块起始行号。 */
+function insertBlockAtSourceLine(markdown, lineIndex, snippet) {
+  const lines = String(markdown === undefined || markdown === null ? '' : markdown).split('\n');
+  const at = Math.max(0, Math.min(lines.length - 1, Number(lineIndex) || 0));
+  const before = lines.slice(0, at);
+  const after = lines.slice(at + 1);
+  while (before.length > 0 && before[before.length - 1].trim() === '') before.pop();
+  while (after.length > 0 && after[0].trim() === '') after.shift();
+  const result = before.slice();
+  if (result.length > 0) result.push('');
+  const line = result.length + 1;
+  result.push(...String(snippet || '').split('\n'));
+  if (after.length > 0) {
+    result.push('');
+    result.push(...after);
+  }
+  return { markdown: result.join('\n'), line };
+}
+
+/** 1-based 行号 → 该行在源码中的起始字符偏移。 */
+function sourceLineStartOffset(markdown, lineNumber) {
+  const lines = String(markdown === undefined || markdown === null ? '' : markdown).split('\n');
+  let offset = 0;
+  for (let index = 0; index < Math.max(0, Number(lineNumber) - 1); index += 1) {
+    offset += (lines[index] || '').length + 1;
+  }
+  return offset;
+}
+
+/** 原文行触发字符：仅当整行（忽略行首缩进）就是 `/` 或 `、`。 */
+function sourceSlashTrigger(lineText) {
+  const candidate = String(lineText === undefined || lineText === null ? '' : lineText).replace(/^[ \t]*/, '');
+  return candidate === '/' || candidate === '、' ? candidate : null;
+}
+
+/** 供测试与原文视图共用：在指定空行插入 Markdown 块。 */
+MN.slashInsertSourceMarkdown = function slashInsertSourceMarkdown(markdown, lineIndex, snippet) {
+  return insertBlockAtSourceLine(markdown, lineIndex, snippet);
+};
+MN.sourceSlashTrigger = sourceSlashTrigger;
+
+/** 供测试与渲染视图共用：修改指定围栏行（1-based）的代码语言，返回新源码。 */
+MN.setCodeFenceLanguage = function setCodeFenceLanguage(markdown, line, language) {
+  const text = String(markdown === undefined || markdown === null ? '' : markdown);
+  const lines = text.split('\n');
+  const index = Math.max(0, Number(line) - 1);
+  const lineText = lines[index] === undefined ? '' : lines[index];
+  const match = /^(\s*)(`{3,}|~{3,})\s*[\w+#.-]*\s*$/.exec(lineText);
+  if (!match) return { markdown: text, changed: false };
+  const value = String(language === undefined || language === null ? '' : language).trim();
+  const nextLine = match[1] + match[2] + (value === 'text' ? '' : value);
+  if (nextLine === lineText) return { markdown: text, changed: false };
+  lines[index] = nextLine;
+  return { markdown: lines.join('\n'), changed: true };
+};
+
 MN.SourceEditor = function SourceEditor(props) {
   const textareaRef = props.textareaRef;
-  return h('textarea', {
+  const [slashMenu, setSlashMenu] = useState(null);
+  const sourceMenuRef = useRef(null);
+
+  const closeSlashMenu = () => setSlashMenu(null);
+
+  /** 当前空行 / 首字符触发行的触发字符。 */
+  const findSourceTrigger = (textarea) => {
+    if (!textarea) return null;
+    const value = String(textarea.value || '');
+    const caret = textarea.selectionStart;
+    if (caret === null || caret === undefined || caret !== textarea.selectionEnd) return null;
+    const lineStart = value.lastIndexOf('\n', caret - 1) + 1;
+    const lineBreak = value.indexOf('\n', caret);
+    const lineEnd = lineBreak < 0 ? value.length : lineBreak;
+    const lineText = value.slice(lineStart, lineEnd);
+    const trigger = sourceSlashTrigger(lineText);
+    if (trigger) {
+      return { trigger, line: value.slice(0, caret).split('\n').length - 1 };
+    }
+    return null;
+  };
+
+  /** 字符已经真实输入；菜单只是可选项。 */
+  const detectSlashInput = (event) => {
+    const textarea = (event && event.currentTarget) || (textareaRef && textareaRef.current);
+    if (!textarea) return;
+    const found = findSourceTrigger(textarea);
+    if (found) {
+      if (!slashMenu || slashMenu.trigger !== found.trigger) openSlashMenu(event, found.trigger);
+      return;
+    }
+    if (slashMenu) closeSlashMenu();
+  };
+
+  const openSlashMenu = (event, trigger) => {
+    const textarea = (event && event.currentTarget) || (textareaRef && textareaRef.current);
+    if (!textarea) return false;
+    const value = String(textarea.value || '');
+    const caret = textarea.selectionStart;
+    if (caret === null || caret === undefined || caret !== textarea.selectionEnd) return false;
+    const lineStart = value.lastIndexOf('\n', caret - 1) + 1;
+    const lineBreak = value.indexOf('\n', caret);
+    const lineEnd = lineBreak < 0 ? value.length : lineBreak;
+    const lineText = value.slice(lineStart, lineEnd);
+    const lineTrigger = sourceSlashTrigger(lineText);
+    if (trigger) {
+      if (lineTrigger !== trigger) return false;
+    } else if (lineText.trim() !== '') {
+      return false;
+    }
+    const position = MN.sourcePosition(value, caret);
+    const mirror = props.mirrorRef && props.mirrorRef.current;
+    let caretRect = null;
+    try {
+      caretRect = MN.measureSourceCaret(textarea, mirror, caret);
+    } catch (error) {
+      caretRect = null;
+    }
+    if (!caretRect) {
+      const area = textarea.getBoundingClientRect();
+      caretRect = { left: area.left + 12, top: area.top + 8, height: 20 };
+    }
+    const width = 286;
+    const height = 360;
+    const viewportWidth = window.innerWidth || 1024;
+    const viewportHeight = window.innerHeight || 768;
+    const left = Math.max(8, Math.min(caretRect.left, viewportWidth - width - 8));
+    const top = Math.max(8, Math.min(caretRect.top + (caretRect.height || 20) + 6, viewportHeight - height - 8));
+    setSlashMenu({ left, top, index: 0, line: position.line - 1, trigger });
+    return true;
+  };
+
+  const applySlashItem = (item) => {
+    const menu = slashMenu;
+    if (!menu) return;
+    setSlashMenu(null);
+    const textarea = textareaRef && textareaRef.current;
+    if (!item) return;
+    if (item.snippet === '') {
+      if (textarea) textarea.focus();
+      return;
+    }
+    // 用 textarea 当前值：触发字符已经写入，insertBlockAtSourceLine 会整行替换掉它。
+    const current = textarea ? textarea.value : props.value;
+    const result = MN.slashInsertSourceMarkdown(current, menu.line, item.snippet);
+    const lineOffset = sourceLineStartOffset(result.markdown, result.line);
+    let innerOffset = String(item.snippet).split('\n')[0].length;
+    if (item.id === 'code') innerOffset += 1;
+    else if (item.id === 'table') innerOffset = 2;
+    else if (item.id === 'divider') innerOffset = String(item.snippet).length;
+    props.onChange(result.markdown);
+    window.requestAnimationFrame(() => {
+      const element = textareaRef && textareaRef.current;
+      if (!element) return;
+      element.focus();
+      try {
+        const target = lineOffset + innerOffset;
+        element.setSelectionRange(target, target);
+        if (props.onCaretChange) props.onCaretChange();
+      } catch (error) {
+        /* 选区恢复失败不影响插入 */
+      }
+    });
+  };
+
+  const handleSlashMenuKeyDown = (event) => {
+    if (!slashMenu) return false;
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      const step = event.key === 'ArrowDown' ? 1 : -1;
+      setSlashMenu((previous) => {
+        if (!previous) return previous;
+        const total = SLASH_ITEMS.length;
+        return { ...previous, index: (previous.index + step + total) % total };
+      });
+      return true;
+    }
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      applySlashItem(SLASH_ITEMS[slashMenu.index] || SLASH_ITEMS[0]);
+      return true;
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeSlashMenu();
+      return true;
+    }
+    return false;
+  };
+
+  useEffect(() => {
+    if (!slashMenu) return;
+    const menu = sourceMenuRef.current;
+    if (!menu || typeof menu.querySelector !== 'function') return;
+    const active = menu.querySelector('[data-active="true"]');
+    if (active && typeof active.scrollIntoView === 'function') active.scrollIntoView({ block: 'nearest' });
+  }, [slashMenu]);
+
+  const textarea = h('textarea', {
     ref: textareaRef,
     className: 'mn-source-input',
     value: props.value,
     placeholder: props.placeholder,
     spellCheck: false,
-    onChange: (event) => props.onChange(event.target.value),
+    onChange: (event) => {
+      props.onChange(event.target.value);
+      if (!(event && event.nativeEvent && event.nativeEvent.isComposing)) detectSlashInput(event);
+    },
+    onCompositionEnd: (event) => detectSlashInput(event),
     onFocus: props.onFocus,
-    onBlur: props.onBlur,
-    onScroll: props.onScroll,
+    onBlur: (event) => {
+      closeSlashMenu();
+      if (props.onBlur) props.onBlur(event);
+    },
+    onScroll: (event) => {
+      closeSlashMenu();
+      if (props.onScroll) props.onScroll(event);
+    },
     onSelect: () => {
       if (props.onCaretChange) props.onCaretChange();
     },
@@ -3325,9 +3592,14 @@ MN.SourceEditor = function SourceEditor(props) {
       if (props.onKeyUp) props.onKeyUp(event);
     },
     onClick: () => {
+      if (slashMenu) closeSlashMenu();
       if (props.onCaretChange) props.onCaretChange();
     },
     onKeyDown: (event) => {
+      if (slashMenu) {
+        if (handleSlashMenuKeyDown(event)) return;
+        if (!['Shift', 'Control', 'Alt', 'Meta', 'CapsLock'].includes(event.key)) closeSlashMenu();
+      }
       if (event.key === 'Tab' && !event.ctrlKey && !event.metaKey && !event.altKey) {
         event.preventDefault();
         const element = event.currentTarget;
@@ -3349,9 +3621,137 @@ MN.SourceEditor = function SourceEditor(props) {
       if (props.onDropFiles) props.onDropFiles(event);
     },
   });
+
+  const menuElement =
+    slashMenu === null
+      ? null
+      : h(MN.SlashMenu, {
+          left: slashMenu.left,
+          top: slashMenu.top,
+          index: slashMenu.index,
+          menuRef: sourceMenuRef,
+          onChoose: applySlashItem,
+          onHover: (index) => setSlashMenu((previous) => (previous ? { ...previous, index } : previous)),
+        });
+
+  return h(MN.React.Fragment, null, textarea, menuElement);
 };
 
 /** 渲染视图编辑器（contenteditable）。 */
+/** 渲染视图根级空块里输入 `/` / `、` 时可选插入的 Markdown 块。 */
+const SLASH_ITEMS = [
+  { id: 'code', icon: 'code', labelKey: 'slash.code', descKey: 'slash.codeDesc', snippet: '```\n\n```' },
+  { id: 'quote', icon: 'quote', labelKey: 'slash.quote', descKey: 'slash.quoteDesc', snippet: '> ' },
+  { id: 'divider', icon: 'hr', labelKey: 'slash.divider', descKey: 'slash.dividerDesc', snippet: '---' },
+  { id: 'table', icon: 'table', labelKey: 'slash.table', descKey: 'slash.tableDesc', snippet: '| 列 1 | 列 2 |\n| --- | --- |\n|  |  |' },
+  { id: 'task', icon: 'task', labelKey: 'slash.task', descKey: 'slash.taskDesc', snippet: '- [ ] ' },
+  { id: 'ordered', icon: 'ordered', labelKey: 'slash.ordered', descKey: 'slash.orderedDesc', snippet: '1. ' },
+  { id: 'bullet', icon: 'list', labelKey: 'slash.bullet', descKey: 'slash.bulletDesc', snippet: '- ' },
+  { id: 'heading3', icon: 'heading', labelKey: 'slash.heading3', descKey: 'slash.heading3Desc', snippet: '### ' },
+  { id: 'heading2', icon: 'heading', labelKey: 'slash.heading2', descKey: 'slash.heading2Desc', snippet: '## ' },
+  { id: 'heading1', icon: 'heading', labelKey: 'slash.heading1', descKey: 'slash.heading1Desc', snippet: '# ' },
+  { id: 'paragraph', icon: 'file', labelKey: 'slash.paragraph', descKey: 'slash.paragraphDesc', snippet: '' },
+];
+
+/** 渲染视图 / 原文视图共用的格式块菜单。 */
+MN.SlashMenu = function SlashMenu(props) {
+  return h(
+    'div',
+    {
+      ref: props.menuRef,
+      className: 'mn-slash-menu',
+      role: 'menu',
+      'aria-label': MN.t('slash.title'),
+      style: { left: props.left + 'px', top: props.top + 'px' },
+      onMouseDown: (event) => event.preventDefault(),
+    },
+    h('div', { className: 'mn-slash-head' }, MN.t('slash.title')),
+    h(
+      'div',
+      { className: 'mn-slash-list' },
+      SLASH_ITEMS.map((item, index) =>
+        h(
+          'button',
+          {
+            key: item.id,
+            type: 'button',
+            className: 'mn-slash-item',
+            role: 'menuitem',
+            'data-active': index === props.index ? 'true' : undefined,
+            onMouseEnter: () => props.onHover(index),
+            onMouseDown: (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              props.onChoose(item);
+            },
+          },
+          h('span', { className: 'mn-slash-icon' }, h(MN.Icon, { name: item.icon, size: 16 })),
+          h(
+            'span',
+            { className: 'mn-slash-copy' },
+            h('span', { className: 'mn-slash-label' }, MN.t(item.labelKey)),
+            h('span', { className: 'mn-slash-desc' }, MN.t(item.descKey)),
+          ),
+        ),
+      ),
+    ),
+    h('div', { className: 'mn-slash-foot' }, MN.t('slash.hint')),
+  );
+};
+
+/**
+ * 在空块的源码位置插入一段 Markdown，返回插入后的源码与块起始行号。
+ * 空块通常没有 data-line（浏览器按 Enter 新建），此时依据前后兄弟块的 data-line 定位。
+ */
+function insertMarkdownBlock(markdown, block) {
+  const text = String(markdown === undefined || markdown === null ? '' : markdown);
+  const lines = text.split('\n');
+  let index = lines.length;
+  if (block && block.getAttribute && block.getAttribute('data-line')) {
+    const start = Number.parseInt(block.getAttribute('data-line'), 10);
+    if (Number.isFinite(start) && start > 0) index = start - 1;
+  } else if (block) {
+    let previous = block.previousElementSibling;
+    while (previous && !(previous.getAttribute && previous.getAttribute('data-line'))) previous = previous.previousElementSibling;
+    let next = block.nextElementSibling;
+    while (next && !(next.getAttribute && next.getAttribute('data-line'))) next = next.nextElementSibling;
+    if (previous && previous.getAttribute('data-line-end')) {
+      const end = Number.parseInt(previous.getAttribute('data-line-end'), 10);
+      if (Number.isFinite(end)) index = end;
+    } else if (next && next.getAttribute('data-line')) {
+      const start = Number.parseInt(next.getAttribute('data-line'), 10);
+      if (Number.isFinite(start) && start > 0) index = start - 1;
+    }
+  }
+  const before = lines.slice(0, Math.max(0, Math.min(lines.length, index)));
+  const after = lines.slice(Math.max(0, Math.min(lines.length, index)));
+  while (before.length > 0 && before[before.length - 1].trim() === '') before.pop();
+  while (after.length > 0 && after[0].trim() === '') after.shift();
+  return { before, after, startLine: before.length + (before.length > 0 ? 2 : 1) };
+}
+
+/** 组合插入片段；单独成块之间留一个空行。 */
+function composeMarkdownBlock(before, after, snippet) {
+  const result = before.slice();
+  if (result.length > 0) result.push('');
+  result.push(...snippet.split('\n'));
+  if (after.length > 0) {
+    result.push('');
+    result.push(...after);
+  }
+  const markdown = result.join('\n');
+  return markdown;
+}
+
+/** 供测试与渲染视图共用：在空块位置插入 Markdown，返回源码与块起始行。 */
+MN.slashInsertMarkdown = function slashInsertMarkdown(markdown, block, snippet) {
+  const insertion = insertMarkdownBlock(markdown, block);
+  return {
+    markdown: composeMarkdownBlock(insertion.before, insertion.after, snippet),
+    line: insertion.startLine,
+  };
+};
+
 MN.RichEditor = function RichEditor(props) {
   const elementRef = useRef(null);
   const lastEmittedRef = useRef(typeof props.markdown === 'string' ? props.markdown : '');
@@ -3363,6 +3763,10 @@ MN.RichEditor = function RichEditor(props) {
   const selectedImageRef = useRef(null);
   const resizeCleanupRef = useRef(null);
   const [imageOverlay, setImageOverlay] = useState(null);
+  const [slashMenu, setSlashMenu] = useState(null);
+  const slashBlockRef = useRef(null);
+  const slashMenuRef = useRef(null);
+  const pendingCaretRef = useRef(null);
 
   const clearImageSelection = useCallback(() => {
     const image = selectedImageRef.current;
@@ -3412,6 +3816,213 @@ MN.RichEditor = function RichEditor(props) {
     props.onChange(markdown);
     if (selectedImageRef.current) window.requestAnimationFrame(syncImageOverlay);
   }, [props.onChange, syncImageOverlay]);
+
+  /** 切换代码块围栏语言，立即重渲染并回写 Markdown。 */
+  const changeCodeLanguage = (select) => {
+    if (!select || select.value === undefined) return;
+    const editor = elementRef.current;
+    const line = Number.parseInt(select.getAttribute('data-code-line'), 10);
+    if (!Number.isFinite(line) || line < 1) return;
+    const value = String(select.value || '').trim();
+    const result = MN.setCodeFenceLanguage(props.markdown, line, value);
+    if (!result.changed) return;
+    const next = result.markdown;
+    lastEmittedRef.current = next;
+    const scrollTop = editor ? editor.scrollTop : 0;
+    setSeedHtml(MN.md.render(next, { mediaUrl: MN.mediaUrl, trackLines: true }));
+    props.onChange(next);
+    if (editor) {
+      window.requestAnimationFrame(() => {
+        editor.scrollTop = scrollTop;
+      });
+    }
+  };
+  const codeLanguageHandlerRef = useRef(changeCodeLanguage);
+  codeLanguageHandlerRef.current = changeCodeLanguage;
+
+  // 原生 change 监听比 React 的 contenteditable 合成事件更可靠。
+  useEffect(() => {
+    const editor = elementRef.current;
+    if (!editor || typeof editor.addEventListener !== 'function') return undefined;
+    const listener = (event) => {
+      const target = event.target;
+      if (target && target.classList && target.classList.contains('mn-code-lang')) {
+        event.stopPropagation();
+        codeLanguageHandlerRef.current(target);
+      }
+    };
+    editor.addEventListener('change', listener, true);
+    return () => editor.removeEventListener('change', listener, true);
+  }, []);
+
+
+  const findTriggerBlock = (trigger) => {
+    const editor = elementRef.current;
+    if (!editor) return null;
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) return null;
+    const range = selection.getRangeAt(0);
+    if (!range.collapsed) return null;
+    if (!editor.contains(range.startContainer)) return null;
+    const normalize = (value) => String(value || '').replace(/\u200b/g, '').replace(/^[ \t]*/, '');
+    if (range.startContainer === editor) {
+      return normalize(editor.textContent) === trigger ? { editor, block: null } : null;
+    }
+    let node = range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentElement;
+    while (node && node.parentElement && node.parentElement !== editor) node = node.parentElement;
+    if (!node || node.parentElement !== editor) return null;
+    const tag = node.tagName ? String(node.tagName).toUpperCase() : '';
+    if (!['P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6'].includes(tag)) return null;
+    if (normalize(node.textContent) !== trigger) return null;
+    return { editor, block: node };
+  };
+
+  /** 在根级块中检测 `/` / `、`，字符已经插入；菜单只是可选操作。 */
+  const detectSlashInput = () => {
+    const editor = elementRef.current;
+    if (!editor) return;
+    for (const trigger of ['/', '、']) {
+      const found = findTriggerBlock(trigger);
+      if (found) {
+        if (!slashMenu || slashMenu.trigger !== trigger) openSlashMenu(trigger);
+        return;
+      }
+    }
+    if (slashMenu) closeSlashMenu();
+  };
+
+  /** 在根级触发块处打开 `/` 格式块菜单。 */
+  const openSlashMenu = (trigger) => {
+    const found = findTriggerBlock(trigger);
+    if (!found) return false;
+    const selection = window.getSelection();
+    const range = selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+    let rect = null;
+    try {
+      if (range && typeof range.getBoundingClientRect === 'function') rect = range.getBoundingClientRect();
+    } catch (error) {
+      rect = null;
+    }
+    if (!rect || (rect.left === 0 && rect.top === 0 && rect.width === 0 && rect.height === 0)) {
+      const target = found.block || found.editor;
+      rect = target && typeof target.getBoundingClientRect === 'function' ? target.getBoundingClientRect() : null;
+    }
+    if (!rect) return false;
+    const width = 286;
+    const height = 360;
+    const viewportWidth = window.innerWidth || 1024;
+    const viewportHeight = window.innerHeight || 768;
+    const left = Math.max(8, Math.min(rect.left, viewportWidth - width - 8));
+    const top = Math.max(8, Math.min((rect.bottom || rect.top) + 6, viewportHeight - height - 8));
+    slashBlockRef.current = found.block;
+    setSlashMenu({ left, top, index: 0, trigger });
+    return true;
+  };
+
+  const closeSlashMenu = () => {
+    setSlashMenu(null);
+    slashBlockRef.current = null;
+  };
+
+  /** 选中格式项后，移除触发字符并把块标记写入源码，再重建渲染视图。 */
+  const applySlashItem = (item) => {
+    const editor = elementRef.current;
+    const block = slashBlockRef.current;
+    const menu = slashMenu;
+    closeSlashMenu();
+    if (!item) return;
+    if (item.snippet === '') {
+      if (editor) editor.focus();
+      return;
+    }
+    // 触发字符已经真实输入到 DOM；选中格式块时先移除它，再按 DOM 当前内容生成源码。
+    if (editor) {
+      const trigger = menu && menu.trigger ? menu.trigger : '';
+      if (trigger) {
+        const normalize = (value) => String(value || '').replace(/\u200b/g, '').trim();
+        if (block) {
+          const text = String(block.textContent || '');
+          if (normalize(text) === trigger) block.textContent = '';
+          else if (text.startsWith(trigger)) block.textContent = text.slice(trigger.length);
+        } else {
+          const text = String(editor.textContent || '');
+          if (normalize(text) === trigger) editor.textContent = '';
+        }
+      }
+    }
+    const markdown = editor ? MN.md.htmlToMarkdown(editor, { mediaRel: MN.mediaRelFromUrl }) : props.markdown;
+    const insertion = MN.slashInsertMarkdown(markdown, block, item.snippet);
+    const next = insertion.markdown;
+    pendingCaretRef.current = insertion.line;
+    lastEmittedRef.current = next;
+    setSeedHtml(MN.md.render(next, { mediaUrl: MN.mediaUrl, trackLines: true }));
+    props.onChange(next);
+    if (editor) editor.focus();
+  };
+
+  /** 菜单键盘操作：上下选择、Enter 插入、Esc 关闭。返回是否已处理。 */
+  const handleSlashMenuKeyDown = (event) => {
+    if (!slashMenu) return false;
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      const step = event.key === 'ArrowDown' ? 1 : -1;
+      setSlashMenu((previous) => {
+        if (!previous) return previous;
+        const total = SLASH_ITEMS.length;
+        return { ...previous, index: (previous.index + step + total) % total };
+      });
+      return true;
+    }
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      applySlashItem(SLASH_ITEMS[slashMenu.index] || SLASH_ITEMS[0]);
+      return true;
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeSlashMenu();
+      return true;
+    }
+    return false;
+  };
+
+  // 插入块后把光标放到新块内；hr 无法放置文本光标时退回编辑器末尾。
+  useEffect(() => {
+    const line = pendingCaretRef.current;
+    if (line === null || line === undefined) return;
+    pendingCaretRef.current = null;
+    const editor = elementRef.current;
+    if (!editor) return;
+    let target = null;
+    try {
+      target = editor.querySelector('[data-line="' + line + '"]');
+    } catch (error) {
+      target = null;
+    }
+    editor.focus();
+    if (target && String(target.tagName || '').toUpperCase() !== 'HR') {
+      const nested = target.querySelector ? target.querySelector('li, p, td, th, pre code') : null;
+      try {
+        placeCaretAtEnd(nested || target);
+      } catch (error) {
+        placeCaretAtEnd(editor);
+      }
+    } else {
+      placeCaretAtEnd(editor);
+    }
+    if (props.onCaretChange) props.onCaretChange();
+  }, [seedHtml]);
+
+  // 方向键移动选项时把当前项滚入可视区域。
+  useEffect(() => {
+    if (!slashMenu) return;
+    const menu = slashMenuRef.current;
+    if (!menu || typeof menu.querySelector !== 'function') return;
+    const active = menu.querySelector('[data-active="true"]');
+    if (active && typeof active.scrollIntoView === 'function') {
+      active.scrollIntoView({ block: 'nearest' });
+    }
+  }, [slashMenu]);
 
   // 外部（原文编辑器）改动时同步渲染；正在此编辑器输入时不重设 DOM，避免光标跳动。
   useEffect(() => {
@@ -3736,6 +4347,18 @@ MN.RichEditor = function RichEditor(props) {
     window.addEventListener('pointercancel', finish);
   };
 
+  const slashMenuElement =
+    slashMenu === null
+      ? null
+      : h(MN.SlashMenu, {
+          left: slashMenu.left,
+          top: slashMenu.top,
+          index: slashMenu.index,
+          menuRef: slashMenuRef,
+          onChoose: applySlashItem,
+          onHover: (index) => setSlashMenu((previous) => (previous ? { ...previous, index } : previous)),
+        });
+
   const imageOverlayElement =
     imageOverlay === null
       ? null
@@ -3782,21 +4405,41 @@ MN.RichEditor = function RichEditor(props) {
         'data-placeholder': props.placeholder || '',
         spellCheck: false,
         dangerouslySetInnerHTML: { __html: seedHtml },
-        onInput: emit,
+        onInput: (event) => {
+          if (event.target && event.target.classList && event.target.classList.contains('mn-code-lang')) return;
+          emit();
+          if (!(event && event.nativeEvent && event.nativeEvent.isComposing)) detectSlashInput();
+        },
+        onCompositionEnd: () => detectSlashInput(),
         onPaste: handlePaste,
         onDrop: handleDrop,
         onFocus: props.onFocus,
-        onBlur: props.onBlur,
-        onScroll: props.onScroll,
+        onBlur: (event) => {
+          closeSlashMenu();
+          if (props.onBlur) props.onBlur(event);
+        },
+        onScroll: (event) => {
+          closeSlashMenu();
+          if (props.onScroll) props.onScroll(event);
+        },
         onKeyUp: () => {
           if (props.onCaretChange) props.onCaretChange();
         },
         onMouseUp: () => {
           if (props.onCaretChange) props.onCaretChange();
         },
-        onMouseDown: handleEditorMouseDown,
+        onMouseDown: (event) => {
+          closeSlashMenu();
+          handleEditorMouseDown(event);
+        },
         onDoubleClick: handleEditorDoubleClick,
         onKeyDown: (event) => {
+          if (slashMenu) {
+            if (handleSlashMenuKeyDown(event)) return;
+            if (!['Shift', 'Control', 'Alt', 'Meta', 'CapsLock'].includes(event.key)) {
+              closeSlashMenu();
+            }
+          }
           if (event.key === 'Tab' && !event.ctrlKey && !event.metaKey && !event.altKey) {
             event.preventDefault();
             try {
@@ -3815,6 +4458,7 @@ MN.RichEditor = function RichEditor(props) {
         },
       },
     ),
+    slashMenuElement,
     imageOverlayElement,
   );
 };
@@ -5781,6 +6425,7 @@ MN.AppPage = function AppPage(props) {
                       { className: 'mn-source' },
                       h(MN.SourceEditor, {
                         textareaRef: sourceRef,
+                        mirrorRef: sourceMirrorRef,
                         value: note.content,
                         placeholder: t('editor.sourcePlaceholder'),
                         onChange: handleContentChange,
@@ -5973,7 +6618,31 @@ MN.DICTIONARIES = {
     'pane.source': 'Markdown 原文',
     'pane.preview': '渲染视图',
     'editor.sourcePlaceholder': '在这里写 Markdown……',
-    'editor.previewPlaceholder': '渲染结果会显示在这里，也可以直接编辑。',
+    'editor.previewPlaceholder': '渲染结果可直接编辑；输入 / 或 、 会弹出格式块菜单，字符仍会保留。',
+    'slash.title': '插入格式块',
+    'slash.paragraph': '正文',
+    'slash.paragraphDesc': '普通文本段落',
+    'slash.heading1': '一级标题',
+    'slash.heading1Desc': '文档大标题',
+    'slash.heading2': '二级标题',
+    'slash.heading2Desc': '章节标题',
+    'slash.heading3': '三级标题',
+    'slash.heading3Desc': '小节标题',
+    'slash.bullet': '无序列表',
+    'slash.bulletDesc': '圆点列表',
+    'slash.ordered': '有序列表',
+    'slash.orderedDesc': '数字编号列表',
+    'slash.task': '待办列表',
+    'slash.taskDesc': '可勾选的任务项',
+    'slash.quote': '引用',
+    'slash.quoteDesc': '引用一段内容',
+    'slash.code': '代码块',
+    'slash.codeDesc': '插入围栏代码块',
+    'slash.table': '表格',
+    'slash.tableDesc': '插入 2 列表格',
+    'slash.divider': '分割线',
+    'slash.dividerDesc': '插入一条水平线',
+    'slash.hint': '↑↓ 选择 · Enter 插入 · Esc 关闭',
     'editor.richAria': 'Markdown 渲染编辑区',
     'toolbar.aria': '格式工具栏',
     'toolbar.bold': '加粗 (Ctrl+B)',
@@ -6103,7 +6772,31 @@ MN.DICTIONARIES = {
     'pane.source': 'Markdown source',
     'pane.preview': 'Rendered view',
     'editor.sourcePlaceholder': 'Write Markdown here…',
-    'editor.previewPlaceholder': 'Rendered content appears here and is editable.',
+    'editor.previewPlaceholder': 'Rendered content is editable. Type / or 、 to open the block menu; the typed character stays.',
+    'slash.title': 'Insert block',
+    'slash.paragraph': 'Text',
+    'slash.paragraphDesc': 'A plain paragraph',
+    'slash.heading1': 'Heading 1',
+    'slash.heading1Desc': 'Large document heading',
+    'slash.heading2': 'Heading 2',
+    'slash.heading2Desc': 'Section heading',
+    'slash.heading3': 'Heading 3',
+    'slash.heading3Desc': 'Subsection heading',
+    'slash.bullet': 'Bulleted list',
+    'slash.bulletDesc': 'A bullet list',
+    'slash.ordered': 'Numbered list',
+    'slash.orderedDesc': 'A numbered list',
+    'slash.task': 'To-do list',
+    'slash.taskDesc': 'Checkable task items',
+    'slash.quote': 'Quote',
+    'slash.quoteDesc': 'Quote a passage',
+    'slash.code': 'Code block',
+    'slash.codeDesc': 'Insert a fenced code block',
+    'slash.table': 'Table',
+    'slash.tableDesc': 'Insert a 2-column table',
+    'slash.divider': 'Divider',
+    'slash.dividerDesc': 'Insert a horizontal rule',
+    'slash.hint': '↑↓ select · Enter insert · Esc close',
     'editor.richAria': 'Rendered Markdown editor',
     'toolbar.aria': 'Formatting toolbar',
     'toolbar.bold': 'Bold (Ctrl+B)',

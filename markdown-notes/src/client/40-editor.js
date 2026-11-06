@@ -499,7 +499,7 @@ function tableSelectionToPosition(wrapper, range, value) {
   if (!sourceCell) return null;
   let renderedIndex = -1;
   for (const part of renderedCell.parts) {
-    if (part.node === container) {
+    if (part.node === container && range.startOffset >= part.start && range.startOffset <= part.end) {
       const relative = range.startOffset - part.start;
       renderedIndex = part.partStart + Math.max(0, Math.min(part.end - part.start, relative));
       break;
@@ -685,7 +685,7 @@ MN.previewSelectionToPosition = function previewSelectionToPosition(preview, val
   for (let index = 0; index < segments.length; index += 1) {
     const segment = segments[index];
     for (const part of segment.parts) {
-      if (part.node === container) {
+      if (part.node === container && range.startOffset >= part.start && range.startOffset <= part.end) {
         const relative = range.startOffset - part.start;
         renderedIndex = part.partStart + Math.max(0, Math.min(part.end - part.start, relative));
         segmentIndex = index;
@@ -792,18 +792,222 @@ MN.caretVisibleIn = function caretVisibleIn(rect, element) {
 };
 
 /** Markdown 原文编辑器。 */
+/** 在原文指定空行处插入 Markdown 块，返回新源码与块起始行号。 */
+function insertBlockAtSourceLine(markdown, lineIndex, snippet) {
+  const lines = String(markdown === undefined || markdown === null ? '' : markdown).split('\n');
+  const at = Math.max(0, Math.min(lines.length - 1, Number(lineIndex) || 0));
+  const before = lines.slice(0, at);
+  const after = lines.slice(at + 1);
+  while (before.length > 0 && before[before.length - 1].trim() === '') before.pop();
+  while (after.length > 0 && after[0].trim() === '') after.shift();
+  const result = before.slice();
+  if (result.length > 0) result.push('');
+  const line = result.length + 1;
+  result.push(...String(snippet || '').split('\n'));
+  if (after.length > 0) {
+    result.push('');
+    result.push(...after);
+  }
+  return { markdown: result.join('\n'), line };
+}
+
+/** 1-based 行号 → 该行在源码中的起始字符偏移。 */
+function sourceLineStartOffset(markdown, lineNumber) {
+  const lines = String(markdown === undefined || markdown === null ? '' : markdown).split('\n');
+  let offset = 0;
+  for (let index = 0; index < Math.max(0, Number(lineNumber) - 1); index += 1) {
+    offset += (lines[index] || '').length + 1;
+  }
+  return offset;
+}
+
+/** 原文行触发字符：仅当整行（忽略行首缩进）就是 `/` 或 `、`。 */
+function sourceSlashTrigger(lineText) {
+  const candidate = String(lineText === undefined || lineText === null ? '' : lineText).replace(/^[ \t]*/, '');
+  return candidate === '/' || candidate === '、' ? candidate : null;
+}
+
+/** 供测试与原文视图共用：在指定空行插入 Markdown 块。 */
+MN.slashInsertSourceMarkdown = function slashInsertSourceMarkdown(markdown, lineIndex, snippet) {
+  return insertBlockAtSourceLine(markdown, lineIndex, snippet);
+};
+MN.sourceSlashTrigger = sourceSlashTrigger;
+
+/** 供测试与渲染视图共用：修改指定围栏行（1-based）的代码语言，返回新源码。 */
+MN.setCodeFenceLanguage = function setCodeFenceLanguage(markdown, line, language) {
+  const text = String(markdown === undefined || markdown === null ? '' : markdown);
+  const lines = text.split('\n');
+  const index = Math.max(0, Number(line) - 1);
+  const lineText = lines[index] === undefined ? '' : lines[index];
+  const match = /^(\s*)(`{3,}|~{3,})\s*[\w+#.-]*\s*$/.exec(lineText);
+  if (!match) return { markdown: text, changed: false };
+  const value = String(language === undefined || language === null ? '' : language).trim();
+  const nextLine = match[1] + match[2] + (value === 'text' ? '' : value);
+  if (nextLine === lineText) return { markdown: text, changed: false };
+  lines[index] = nextLine;
+  return { markdown: lines.join('\n'), changed: true };
+};
+
 MN.SourceEditor = function SourceEditor(props) {
   const textareaRef = props.textareaRef;
-  return h('textarea', {
+  const [slashMenu, setSlashMenu] = useState(null);
+  const sourceMenuRef = useRef(null);
+
+  const closeSlashMenu = () => setSlashMenu(null);
+
+  /** 当前空行 / 首字符触发行的触发字符。 */
+  const findSourceTrigger = (textarea) => {
+    if (!textarea) return null;
+    const value = String(textarea.value || '');
+    const caret = textarea.selectionStart;
+    if (caret === null || caret === undefined || caret !== textarea.selectionEnd) return null;
+    const lineStart = value.lastIndexOf('\n', caret - 1) + 1;
+    const lineBreak = value.indexOf('\n', caret);
+    const lineEnd = lineBreak < 0 ? value.length : lineBreak;
+    const lineText = value.slice(lineStart, lineEnd);
+    const trigger = sourceSlashTrigger(lineText);
+    if (trigger) {
+      return { trigger, line: value.slice(0, caret).split('\n').length - 1 };
+    }
+    return null;
+  };
+
+  /** 字符已经真实输入；菜单只是可选项。 */
+  const detectSlashInput = (event) => {
+    const textarea = (event && event.currentTarget) || (textareaRef && textareaRef.current);
+    if (!textarea) return;
+    const found = findSourceTrigger(textarea);
+    if (found) {
+      if (!slashMenu || slashMenu.trigger !== found.trigger) openSlashMenu(event, found.trigger);
+      return;
+    }
+    if (slashMenu) closeSlashMenu();
+  };
+
+  const openSlashMenu = (event, trigger) => {
+    const textarea = (event && event.currentTarget) || (textareaRef && textareaRef.current);
+    if (!textarea) return false;
+    const value = String(textarea.value || '');
+    const caret = textarea.selectionStart;
+    if (caret === null || caret === undefined || caret !== textarea.selectionEnd) return false;
+    const lineStart = value.lastIndexOf('\n', caret - 1) + 1;
+    const lineBreak = value.indexOf('\n', caret);
+    const lineEnd = lineBreak < 0 ? value.length : lineBreak;
+    const lineText = value.slice(lineStart, lineEnd);
+    const lineTrigger = sourceSlashTrigger(lineText);
+    if (trigger) {
+      if (lineTrigger !== trigger) return false;
+    } else if (lineText.trim() !== '') {
+      return false;
+    }
+    const position = MN.sourcePosition(value, caret);
+    const mirror = props.mirrorRef && props.mirrorRef.current;
+    let caretRect = null;
+    try {
+      caretRect = MN.measureSourceCaret(textarea, mirror, caret);
+    } catch (error) {
+      caretRect = null;
+    }
+    if (!caretRect) {
+      const area = textarea.getBoundingClientRect();
+      caretRect = { left: area.left + 12, top: area.top + 8, height: 20 };
+    }
+    const width = 286;
+    const height = 360;
+    const viewportWidth = window.innerWidth || 1024;
+    const viewportHeight = window.innerHeight || 768;
+    const left = Math.max(8, Math.min(caretRect.left, viewportWidth - width - 8));
+    const top = Math.max(8, Math.min(caretRect.top + (caretRect.height || 20) + 6, viewportHeight - height - 8));
+    setSlashMenu({ left, top, index: 0, line: position.line - 1, trigger });
+    return true;
+  };
+
+  const applySlashItem = (item) => {
+    const menu = slashMenu;
+    if (!menu) return;
+    setSlashMenu(null);
+    const textarea = textareaRef && textareaRef.current;
+    if (!item) return;
+    if (item.snippet === '') {
+      if (textarea) textarea.focus();
+      return;
+    }
+    // 用 textarea 当前值：触发字符已经写入，insertBlockAtSourceLine 会整行替换掉它。
+    const current = textarea ? textarea.value : props.value;
+    const result = MN.slashInsertSourceMarkdown(current, menu.line, item.snippet);
+    const lineOffset = sourceLineStartOffset(result.markdown, result.line);
+    let innerOffset = String(item.snippet).split('\n')[0].length;
+    if (item.id === 'code') innerOffset += 1;
+    else if (item.id === 'table') innerOffset = 2;
+    else if (item.id === 'divider') innerOffset = String(item.snippet).length;
+    props.onChange(result.markdown);
+    window.requestAnimationFrame(() => {
+      const element = textareaRef && textareaRef.current;
+      if (!element) return;
+      element.focus();
+      try {
+        const target = lineOffset + innerOffset;
+        element.setSelectionRange(target, target);
+        if (props.onCaretChange) props.onCaretChange();
+      } catch (error) {
+        /* 选区恢复失败不影响插入 */
+      }
+    });
+  };
+
+  const handleSlashMenuKeyDown = (event) => {
+    if (!slashMenu) return false;
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      const step = event.key === 'ArrowDown' ? 1 : -1;
+      setSlashMenu((previous) => {
+        if (!previous) return previous;
+        const total = SLASH_ITEMS.length;
+        return { ...previous, index: (previous.index + step + total) % total };
+      });
+      return true;
+    }
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      applySlashItem(SLASH_ITEMS[slashMenu.index] || SLASH_ITEMS[0]);
+      return true;
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeSlashMenu();
+      return true;
+    }
+    return false;
+  };
+
+  useEffect(() => {
+    if (!slashMenu) return;
+    const menu = sourceMenuRef.current;
+    if (!menu || typeof menu.querySelector !== 'function') return;
+    const active = menu.querySelector('[data-active="true"]');
+    if (active && typeof active.scrollIntoView === 'function') active.scrollIntoView({ block: 'nearest' });
+  }, [slashMenu]);
+
+  const textarea = h('textarea', {
     ref: textareaRef,
     className: 'mn-source-input',
     value: props.value,
     placeholder: props.placeholder,
     spellCheck: false,
-    onChange: (event) => props.onChange(event.target.value),
+    onChange: (event) => {
+      props.onChange(event.target.value);
+      if (!(event && event.nativeEvent && event.nativeEvent.isComposing)) detectSlashInput(event);
+    },
+    onCompositionEnd: (event) => detectSlashInput(event),
     onFocus: props.onFocus,
-    onBlur: props.onBlur,
-    onScroll: props.onScroll,
+    onBlur: (event) => {
+      closeSlashMenu();
+      if (props.onBlur) props.onBlur(event);
+    },
+    onScroll: (event) => {
+      closeSlashMenu();
+      if (props.onScroll) props.onScroll(event);
+    },
     onSelect: () => {
       if (props.onCaretChange) props.onCaretChange();
     },
@@ -812,9 +1016,14 @@ MN.SourceEditor = function SourceEditor(props) {
       if (props.onKeyUp) props.onKeyUp(event);
     },
     onClick: () => {
+      if (slashMenu) closeSlashMenu();
       if (props.onCaretChange) props.onCaretChange();
     },
     onKeyDown: (event) => {
+      if (slashMenu) {
+        if (handleSlashMenuKeyDown(event)) return;
+        if (!['Shift', 'Control', 'Alt', 'Meta', 'CapsLock'].includes(event.key)) closeSlashMenu();
+      }
       if (event.key === 'Tab' && !event.ctrlKey && !event.metaKey && !event.altKey) {
         event.preventDefault();
         const element = event.currentTarget;
@@ -836,9 +1045,137 @@ MN.SourceEditor = function SourceEditor(props) {
       if (props.onDropFiles) props.onDropFiles(event);
     },
   });
+
+  const menuElement =
+    slashMenu === null
+      ? null
+      : h(MN.SlashMenu, {
+          left: slashMenu.left,
+          top: slashMenu.top,
+          index: slashMenu.index,
+          menuRef: sourceMenuRef,
+          onChoose: applySlashItem,
+          onHover: (index) => setSlashMenu((previous) => (previous ? { ...previous, index } : previous)),
+        });
+
+  return h(MN.React.Fragment, null, textarea, menuElement);
 };
 
 /** 渲染视图编辑器（contenteditable）。 */
+/** 渲染视图根级空块里输入 `/` / `、` 时可选插入的 Markdown 块。 */
+const SLASH_ITEMS = [
+  { id: 'code', icon: 'code', labelKey: 'slash.code', descKey: 'slash.codeDesc', snippet: '```\n\n```' },
+  { id: 'quote', icon: 'quote', labelKey: 'slash.quote', descKey: 'slash.quoteDesc', snippet: '> ' },
+  { id: 'divider', icon: 'hr', labelKey: 'slash.divider', descKey: 'slash.dividerDesc', snippet: '---' },
+  { id: 'table', icon: 'table', labelKey: 'slash.table', descKey: 'slash.tableDesc', snippet: '| 列 1 | 列 2 |\n| --- | --- |\n|  |  |' },
+  { id: 'task', icon: 'task', labelKey: 'slash.task', descKey: 'slash.taskDesc', snippet: '- [ ] ' },
+  { id: 'ordered', icon: 'ordered', labelKey: 'slash.ordered', descKey: 'slash.orderedDesc', snippet: '1. ' },
+  { id: 'bullet', icon: 'list', labelKey: 'slash.bullet', descKey: 'slash.bulletDesc', snippet: '- ' },
+  { id: 'heading3', icon: 'heading', labelKey: 'slash.heading3', descKey: 'slash.heading3Desc', snippet: '### ' },
+  { id: 'heading2', icon: 'heading', labelKey: 'slash.heading2', descKey: 'slash.heading2Desc', snippet: '## ' },
+  { id: 'heading1', icon: 'heading', labelKey: 'slash.heading1', descKey: 'slash.heading1Desc', snippet: '# ' },
+  { id: 'paragraph', icon: 'file', labelKey: 'slash.paragraph', descKey: 'slash.paragraphDesc', snippet: '' },
+];
+
+/** 渲染视图 / 原文视图共用的格式块菜单。 */
+MN.SlashMenu = function SlashMenu(props) {
+  return h(
+    'div',
+    {
+      ref: props.menuRef,
+      className: 'mn-slash-menu',
+      role: 'menu',
+      'aria-label': MN.t('slash.title'),
+      style: { left: props.left + 'px', top: props.top + 'px' },
+      onMouseDown: (event) => event.preventDefault(),
+    },
+    h('div', { className: 'mn-slash-head' }, MN.t('slash.title')),
+    h(
+      'div',
+      { className: 'mn-slash-list' },
+      SLASH_ITEMS.map((item, index) =>
+        h(
+          'button',
+          {
+            key: item.id,
+            type: 'button',
+            className: 'mn-slash-item',
+            role: 'menuitem',
+            'data-active': index === props.index ? 'true' : undefined,
+            onMouseEnter: () => props.onHover(index),
+            onMouseDown: (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              props.onChoose(item);
+            },
+          },
+          h('span', { className: 'mn-slash-icon' }, h(MN.Icon, { name: item.icon, size: 16 })),
+          h(
+            'span',
+            { className: 'mn-slash-copy' },
+            h('span', { className: 'mn-slash-label' }, MN.t(item.labelKey)),
+            h('span', { className: 'mn-slash-desc' }, MN.t(item.descKey)),
+          ),
+        ),
+      ),
+    ),
+    h('div', { className: 'mn-slash-foot' }, MN.t('slash.hint')),
+  );
+};
+
+/**
+ * 在空块的源码位置插入一段 Markdown，返回插入后的源码与块起始行号。
+ * 空块通常没有 data-line（浏览器按 Enter 新建），此时依据前后兄弟块的 data-line 定位。
+ */
+function insertMarkdownBlock(markdown, block) {
+  const text = String(markdown === undefined || markdown === null ? '' : markdown);
+  const lines = text.split('\n');
+  let index = lines.length;
+  if (block && block.getAttribute && block.getAttribute('data-line')) {
+    const start = Number.parseInt(block.getAttribute('data-line'), 10);
+    if (Number.isFinite(start) && start > 0) index = start - 1;
+  } else if (block) {
+    let previous = block.previousElementSibling;
+    while (previous && !(previous.getAttribute && previous.getAttribute('data-line'))) previous = previous.previousElementSibling;
+    let next = block.nextElementSibling;
+    while (next && !(next.getAttribute && next.getAttribute('data-line'))) next = next.nextElementSibling;
+    if (previous && previous.getAttribute('data-line-end')) {
+      const end = Number.parseInt(previous.getAttribute('data-line-end'), 10);
+      if (Number.isFinite(end)) index = end;
+    } else if (next && next.getAttribute('data-line')) {
+      const start = Number.parseInt(next.getAttribute('data-line'), 10);
+      if (Number.isFinite(start) && start > 0) index = start - 1;
+    }
+  }
+  const before = lines.slice(0, Math.max(0, Math.min(lines.length, index)));
+  const after = lines.slice(Math.max(0, Math.min(lines.length, index)));
+  while (before.length > 0 && before[before.length - 1].trim() === '') before.pop();
+  while (after.length > 0 && after[0].trim() === '') after.shift();
+  return { before, after, startLine: before.length + (before.length > 0 ? 2 : 1) };
+}
+
+/** 组合插入片段；单独成块之间留一个空行。 */
+function composeMarkdownBlock(before, after, snippet) {
+  const result = before.slice();
+  if (result.length > 0) result.push('');
+  result.push(...snippet.split('\n'));
+  if (after.length > 0) {
+    result.push('');
+    result.push(...after);
+  }
+  const markdown = result.join('\n');
+  return markdown;
+}
+
+/** 供测试与渲染视图共用：在空块位置插入 Markdown，返回源码与块起始行。 */
+MN.slashInsertMarkdown = function slashInsertMarkdown(markdown, block, snippet) {
+  const insertion = insertMarkdownBlock(markdown, block);
+  return {
+    markdown: composeMarkdownBlock(insertion.before, insertion.after, snippet),
+    line: insertion.startLine,
+  };
+};
+
 MN.RichEditor = function RichEditor(props) {
   const elementRef = useRef(null);
   const lastEmittedRef = useRef(typeof props.markdown === 'string' ? props.markdown : '');
@@ -850,6 +1187,10 @@ MN.RichEditor = function RichEditor(props) {
   const selectedImageRef = useRef(null);
   const resizeCleanupRef = useRef(null);
   const [imageOverlay, setImageOverlay] = useState(null);
+  const [slashMenu, setSlashMenu] = useState(null);
+  const slashBlockRef = useRef(null);
+  const slashMenuRef = useRef(null);
+  const pendingCaretRef = useRef(null);
 
   const clearImageSelection = useCallback(() => {
     const image = selectedImageRef.current;
@@ -899,6 +1240,213 @@ MN.RichEditor = function RichEditor(props) {
     props.onChange(markdown);
     if (selectedImageRef.current) window.requestAnimationFrame(syncImageOverlay);
   }, [props.onChange, syncImageOverlay]);
+
+  /** 切换代码块围栏语言，立即重渲染并回写 Markdown。 */
+  const changeCodeLanguage = (select) => {
+    if (!select || select.value === undefined) return;
+    const editor = elementRef.current;
+    const line = Number.parseInt(select.getAttribute('data-code-line'), 10);
+    if (!Number.isFinite(line) || line < 1) return;
+    const value = String(select.value || '').trim();
+    const result = MN.setCodeFenceLanguage(props.markdown, line, value);
+    if (!result.changed) return;
+    const next = result.markdown;
+    lastEmittedRef.current = next;
+    const scrollTop = editor ? editor.scrollTop : 0;
+    setSeedHtml(MN.md.render(next, { mediaUrl: MN.mediaUrl, trackLines: true }));
+    props.onChange(next);
+    if (editor) {
+      window.requestAnimationFrame(() => {
+        editor.scrollTop = scrollTop;
+      });
+    }
+  };
+  const codeLanguageHandlerRef = useRef(changeCodeLanguage);
+  codeLanguageHandlerRef.current = changeCodeLanguage;
+
+  // 原生 change 监听比 React 的 contenteditable 合成事件更可靠。
+  useEffect(() => {
+    const editor = elementRef.current;
+    if (!editor || typeof editor.addEventListener !== 'function') return undefined;
+    const listener = (event) => {
+      const target = event.target;
+      if (target && target.classList && target.classList.contains('mn-code-lang')) {
+        event.stopPropagation();
+        codeLanguageHandlerRef.current(target);
+      }
+    };
+    editor.addEventListener('change', listener, true);
+    return () => editor.removeEventListener('change', listener, true);
+  }, []);
+
+
+  const findTriggerBlock = (trigger) => {
+    const editor = elementRef.current;
+    if (!editor) return null;
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) return null;
+    const range = selection.getRangeAt(0);
+    if (!range.collapsed) return null;
+    if (!editor.contains(range.startContainer)) return null;
+    const normalize = (value) => String(value || '').replace(/\u200b/g, '').replace(/^[ \t]*/, '');
+    if (range.startContainer === editor) {
+      return normalize(editor.textContent) === trigger ? { editor, block: null } : null;
+    }
+    let node = range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentElement;
+    while (node && node.parentElement && node.parentElement !== editor) node = node.parentElement;
+    if (!node || node.parentElement !== editor) return null;
+    const tag = node.tagName ? String(node.tagName).toUpperCase() : '';
+    if (!['P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6'].includes(tag)) return null;
+    if (normalize(node.textContent) !== trigger) return null;
+    return { editor, block: node };
+  };
+
+  /** 在根级块中检测 `/` / `、`，字符已经插入；菜单只是可选操作。 */
+  const detectSlashInput = () => {
+    const editor = elementRef.current;
+    if (!editor) return;
+    for (const trigger of ['/', '、']) {
+      const found = findTriggerBlock(trigger);
+      if (found) {
+        if (!slashMenu || slashMenu.trigger !== trigger) openSlashMenu(trigger);
+        return;
+      }
+    }
+    if (slashMenu) closeSlashMenu();
+  };
+
+  /** 在根级触发块处打开 `/` 格式块菜单。 */
+  const openSlashMenu = (trigger) => {
+    const found = findTriggerBlock(trigger);
+    if (!found) return false;
+    const selection = window.getSelection();
+    const range = selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+    let rect = null;
+    try {
+      if (range && typeof range.getBoundingClientRect === 'function') rect = range.getBoundingClientRect();
+    } catch (error) {
+      rect = null;
+    }
+    if (!rect || (rect.left === 0 && rect.top === 0 && rect.width === 0 && rect.height === 0)) {
+      const target = found.block || found.editor;
+      rect = target && typeof target.getBoundingClientRect === 'function' ? target.getBoundingClientRect() : null;
+    }
+    if (!rect) return false;
+    const width = 286;
+    const height = 360;
+    const viewportWidth = window.innerWidth || 1024;
+    const viewportHeight = window.innerHeight || 768;
+    const left = Math.max(8, Math.min(rect.left, viewportWidth - width - 8));
+    const top = Math.max(8, Math.min((rect.bottom || rect.top) + 6, viewportHeight - height - 8));
+    slashBlockRef.current = found.block;
+    setSlashMenu({ left, top, index: 0, trigger });
+    return true;
+  };
+
+  const closeSlashMenu = () => {
+    setSlashMenu(null);
+    slashBlockRef.current = null;
+  };
+
+  /** 选中格式项后，移除触发字符并把块标记写入源码，再重建渲染视图。 */
+  const applySlashItem = (item) => {
+    const editor = elementRef.current;
+    const block = slashBlockRef.current;
+    const menu = slashMenu;
+    closeSlashMenu();
+    if (!item) return;
+    if (item.snippet === '') {
+      if (editor) editor.focus();
+      return;
+    }
+    // 触发字符已经真实输入到 DOM；选中格式块时先移除它，再按 DOM 当前内容生成源码。
+    if (editor) {
+      const trigger = menu && menu.trigger ? menu.trigger : '';
+      if (trigger) {
+        const normalize = (value) => String(value || '').replace(/\u200b/g, '').trim();
+        if (block) {
+          const text = String(block.textContent || '');
+          if (normalize(text) === trigger) block.textContent = '';
+          else if (text.startsWith(trigger)) block.textContent = text.slice(trigger.length);
+        } else {
+          const text = String(editor.textContent || '');
+          if (normalize(text) === trigger) editor.textContent = '';
+        }
+      }
+    }
+    const markdown = editor ? MN.md.htmlToMarkdown(editor, { mediaRel: MN.mediaRelFromUrl }) : props.markdown;
+    const insertion = MN.slashInsertMarkdown(markdown, block, item.snippet);
+    const next = insertion.markdown;
+    pendingCaretRef.current = insertion.line;
+    lastEmittedRef.current = next;
+    setSeedHtml(MN.md.render(next, { mediaUrl: MN.mediaUrl, trackLines: true }));
+    props.onChange(next);
+    if (editor) editor.focus();
+  };
+
+  /** 菜单键盘操作：上下选择、Enter 插入、Esc 关闭。返回是否已处理。 */
+  const handleSlashMenuKeyDown = (event) => {
+    if (!slashMenu) return false;
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      const step = event.key === 'ArrowDown' ? 1 : -1;
+      setSlashMenu((previous) => {
+        if (!previous) return previous;
+        const total = SLASH_ITEMS.length;
+        return { ...previous, index: (previous.index + step + total) % total };
+      });
+      return true;
+    }
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      applySlashItem(SLASH_ITEMS[slashMenu.index] || SLASH_ITEMS[0]);
+      return true;
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeSlashMenu();
+      return true;
+    }
+    return false;
+  };
+
+  // 插入块后把光标放到新块内；hr 无法放置文本光标时退回编辑器末尾。
+  useEffect(() => {
+    const line = pendingCaretRef.current;
+    if (line === null || line === undefined) return;
+    pendingCaretRef.current = null;
+    const editor = elementRef.current;
+    if (!editor) return;
+    let target = null;
+    try {
+      target = editor.querySelector('[data-line="' + line + '"]');
+    } catch (error) {
+      target = null;
+    }
+    editor.focus();
+    if (target && String(target.tagName || '').toUpperCase() !== 'HR') {
+      const nested = target.querySelector ? target.querySelector('li, p, td, th, pre code') : null;
+      try {
+        placeCaretAtEnd(nested || target);
+      } catch (error) {
+        placeCaretAtEnd(editor);
+      }
+    } else {
+      placeCaretAtEnd(editor);
+    }
+    if (props.onCaretChange) props.onCaretChange();
+  }, [seedHtml]);
+
+  // 方向键移动选项时把当前项滚入可视区域。
+  useEffect(() => {
+    if (!slashMenu) return;
+    const menu = slashMenuRef.current;
+    if (!menu || typeof menu.querySelector !== 'function') return;
+    const active = menu.querySelector('[data-active="true"]');
+    if (active && typeof active.scrollIntoView === 'function') {
+      active.scrollIntoView({ block: 'nearest' });
+    }
+  }, [slashMenu]);
 
   // 外部（原文编辑器）改动时同步渲染；正在此编辑器输入时不重设 DOM，避免光标跳动。
   useEffect(() => {
@@ -1223,6 +1771,18 @@ MN.RichEditor = function RichEditor(props) {
     window.addEventListener('pointercancel', finish);
   };
 
+  const slashMenuElement =
+    slashMenu === null
+      ? null
+      : h(MN.SlashMenu, {
+          left: slashMenu.left,
+          top: slashMenu.top,
+          index: slashMenu.index,
+          menuRef: slashMenuRef,
+          onChoose: applySlashItem,
+          onHover: (index) => setSlashMenu((previous) => (previous ? { ...previous, index } : previous)),
+        });
+
   const imageOverlayElement =
     imageOverlay === null
       ? null
@@ -1269,21 +1829,41 @@ MN.RichEditor = function RichEditor(props) {
         'data-placeholder': props.placeholder || '',
         spellCheck: false,
         dangerouslySetInnerHTML: { __html: seedHtml },
-        onInput: emit,
+        onInput: (event) => {
+          if (event.target && event.target.classList && event.target.classList.contains('mn-code-lang')) return;
+          emit();
+          if (!(event && event.nativeEvent && event.nativeEvent.isComposing)) detectSlashInput();
+        },
+        onCompositionEnd: () => detectSlashInput(),
         onPaste: handlePaste,
         onDrop: handleDrop,
         onFocus: props.onFocus,
-        onBlur: props.onBlur,
-        onScroll: props.onScroll,
+        onBlur: (event) => {
+          closeSlashMenu();
+          if (props.onBlur) props.onBlur(event);
+        },
+        onScroll: (event) => {
+          closeSlashMenu();
+          if (props.onScroll) props.onScroll(event);
+        },
         onKeyUp: () => {
           if (props.onCaretChange) props.onCaretChange();
         },
         onMouseUp: () => {
           if (props.onCaretChange) props.onCaretChange();
         },
-        onMouseDown: handleEditorMouseDown,
+        onMouseDown: (event) => {
+          closeSlashMenu();
+          handleEditorMouseDown(event);
+        },
         onDoubleClick: handleEditorDoubleClick,
         onKeyDown: (event) => {
+          if (slashMenu) {
+            if (handleSlashMenuKeyDown(event)) return;
+            if (!['Shift', 'Control', 'Alt', 'Meta', 'CapsLock'].includes(event.key)) {
+              closeSlashMenu();
+            }
+          }
           if (event.key === 'Tab' && !event.ctrlKey && !event.metaKey && !event.altKey) {
             event.preventDefault();
             try {
@@ -1302,6 +1882,7 @@ MN.RichEditor = function RichEditor(props) {
         },
       },
     ),
+    slashMenuElement,
     imageOverlayElement,
   );
 };

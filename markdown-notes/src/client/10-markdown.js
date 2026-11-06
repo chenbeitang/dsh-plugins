@@ -38,6 +38,37 @@ MN.md = (function () {
     return escapeHtml(text).replace(/'/g, '&#39;');
   }
 
+  /** 代码块语言下拉选项；未指定语言时显示 text。 */
+  const CODE_LANGUAGE_OPTIONS = [
+    'text', 'java', 'javascript', 'typescript', 'python', 'c', 'cpp', 'csharp', 'go', 'rust',
+    'kotlin', 'swift', 'php', 'ruby', 'sql', 'xml', 'html', 'css', 'json', 'yaml', 'shell',
+    'powershell', 'dockerfile', 'diff', 'markdown',
+  ];
+
+  function codeLanguageSelect(language, startLine) {
+    const current = language === '' ? 'text' : language;
+    const values = CODE_LANGUAGE_OPTIONS.slice();
+    if (!values.includes(current)) values.unshift(current);
+    const options = values
+      .map(
+        (value) =>
+          '<option value="' + escapeAttr(value) + '"' + (value === current ? ' selected' : '') + '>' +
+          escapeHtml(value) +
+          '</option>',
+      )
+      .join('');
+    return (
+      '<div class="mn-code-head" contenteditable="false">' +
+      '<span class="mn-code-head-icon" aria-hidden="true">&lt;/&gt;</span>' +
+      '<span class="mn-code-lang-wrap">' +
+      '<select class="mn-code-lang" contenteditable="false" data-code-line="' + (Number(startLine) || 1) + '" title="代码类型" aria-label="代码类型">' +
+      options +
+      '</select>' +
+      '</span>' +
+      '</div>'
+    );
+  }
+
   function pushSlot(slots, html) {
     slots.push(html);
     return SLOT_OPEN + (slots.length - 1) + SLOT_CLOSE;
@@ -341,7 +372,8 @@ MN.md = (function () {
         const className = language === '' ? '' : ' class="language-' + escapeAttr(language) + '"';
         const code = buffer.join('\n');
         const highlighted = language === '' ? escapeHtml(code) : highlightCode(code, language);
-        out.push('<pre' + attrs(startLine, index) + '><code' + className + '>' + highlighted + '</code></pre>');
+        const pre = '<pre' + attrs(startLine, index) + '><code' + className + '>' + highlighted + '</code></pre>';
+        out.push('<div class="mn-code-block">' + codeLanguageSelect(language, startLine) + pre + '</div>');
         continue;
       }
 
@@ -575,6 +607,11 @@ MN.md = (function () {
 
   function blockNodeToMarkdown(node, context) {
     const tag = node.tagName.toLowerCase();
+    if (tag === 'div' && node.classList && node.classList.contains('mn-code-head')) return '';
+    if (tag === 'div' && node.classList && node.classList.contains('mn-code-block')) {
+      const pre = typeof node.querySelector === 'function' ? node.querySelector('pre') : null;
+      return pre ? blockNodeToMarkdown(pre, context) : '';
+    }
     if (/^h[1-6]$/.test(tag)) {
       return '#'.repeat(Number(tag[1])) + ' ' + inlineNodes(node.childNodes, context).trim();
     }
@@ -587,7 +624,7 @@ MN.md = (function () {
       const codeElement = node.querySelector('code');
       const text = (codeElement || node).textContent.replace(/\n$/, '');
       const className = codeElement ? String(codeElement.getAttribute('class') || '') : '';
-      const language = /language-([\w+-]+)/.exec(className);
+      const language = /language-([\w+#.-]+)/.exec(className);
       return '```' + (language ? language[1] : '') + '\n' + text + '\n```';
     }
     if (tag === 'hr') return '---';

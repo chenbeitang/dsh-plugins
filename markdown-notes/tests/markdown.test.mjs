@@ -103,6 +103,62 @@ check('unknown and plain languages do not break', () => {
   assert.doesNotMatch(plain, /<b>/);
 });
 
+check('code block language selector', () => {
+  const plain = render('```\nplain\n```');
+  assert.match(plain, /<div class="mn-code-block">/);
+  assert.match(plain, /<select class="mn-code-lang"[^>]*data-code-line="1"/);
+  assert.match(plain, /<option value="text" selected>text<\/option>/);
+  assert.match(plain, /<pre><code>/);
+
+  const java = render('```java\nclass A {}\n```');
+  assert.match(java, /<option value="java" selected>java<\/option>/);
+  assert.match(java, /<pre><code class="language-java">/);
+});
+
+check('htmlToMarkdown ignores the code block header', () => {
+  const text = { nodeType: 3, nodeValue: 'class A {}\n' };
+  const code = {
+    nodeType: 1,
+    tagName: 'CODE',
+    childNodes: [text],
+    textContent: 'class A {}\n',
+    getAttribute(name) {
+      return name === 'class' ? 'language-java' : null;
+    },
+  };
+  const pre = {
+    nodeType: 1,
+    tagName: 'PRE',
+    childNodes: [code],
+    textContent: 'class A {}\n',
+    querySelector(selector) {
+      return selector === 'code' ? code : null;
+    },
+  };
+  const header = {
+    nodeType: 1,
+    tagName: 'DIV',
+    classList: { contains: (name) => name === 'mn-code-head' },
+    childNodes: [],
+    textContent: 'codejava',
+    querySelector() {
+      return null;
+    },
+  };
+  const wrapper = {
+    nodeType: 1,
+    tagName: 'DIV',
+    classList: { contains: (name) => name === 'mn-code-block' },
+    childNodes: [header, pre],
+    textContent: 'codejavaclass A {}\n',
+    querySelector(selector) {
+      return selector === 'pre' ? pre : null;
+    },
+  };
+  const root = { nodeType: 1, tagName: 'DIV', childNodes: [wrapper] };
+  assert.equal(MN.md.htmlToMarkdown(root), '```java\nclass A {}\n```');
+});
+
 check('links and images', () => {
   const html = render('[site](https://example.com?a=1&b=2) ![shot](assets/a.png)', {
     mediaUrl: (rel) => '/markdown-notes/api/media?path=' + encodeURIComponent(rel),
